@@ -2,6 +2,9 @@
 
 import Prelude ()
 import System.Directory.Internal.Prelude
-import System.Directory
+import System.Directory.OsPath
+import TestUtils ()
 import Util (TestEnv)
 import qualified Util as T
+-- This comment prevents "T" above from being treated as the function-like
+-- macro defined earlier.

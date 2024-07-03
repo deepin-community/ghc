@@ -12,20 +12,23 @@
 
    Note: You should worry about file system type when use this module's function in your application:
 
-     * NTFS only supprts this functionality.
+     * NTFS only supports this functionality.
 
      * ReFS doesn't support hard link currently.
 -}
 module System.Win32.HardLink
-  ( module System.Win32.HardLink
+  ( createHardLink
+  , createHardLink'
   ) where
-import System.Win32.File   ( LPSECURITY_ATTRIBUTES, failIfFalseWithRetry_ )
-import System.Win32.String ( LPCTSTR, withTString )
-import System.Win32.Types  ( BOOL, nullPtr )
+
+import System.Win32.HardLink.Internal
+import System.Win32.File   ( failIfFalseWithRetry_ )
+import System.Win32.String ( withTString )
+import System.Win32.Types  ( nullPtr )
 
 #include "windows_cconv.h"
 
--- | NOTE: createHardLink is /flipped arguments/ to provide compatiblity for Unix.
+-- | NOTE: createHardLink is /flipped arguments/ to provide compatibility for Unix.
 -- 
 -- If you want to create hard link by Windows way, use 'createHardLink'' instead.
 createHardLink :: FilePath -- ^ Target file path
@@ -42,11 +45,6 @@ createHardLink' link target =
         failIfFalseWithRetry_ (unwords ["CreateHardLinkW",show link,show target]) $
           c_CreateHardLink c_link c_target nullPtr
 
-foreign import WINDOWS_CCONV unsafe "windows.h CreateHardLinkW"
-  c_CreateHardLink :: LPCTSTR -- ^ Hard link name
-                   -> LPCTSTR -- ^ Target file path
-                   -> LPSECURITY_ATTRIBUTES -- ^ This parameter is reserved. You should pass just /nullPtr/.
-                   -> IO BOOL
 
 {-
 -- We plan to check file system type internally.

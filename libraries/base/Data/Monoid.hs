@@ -13,7 +13,7 @@
 -- License     :  BSD-style (see the file libraries/base/LICENSE)
 --
 -- Maintainer  :  libraries@haskell.org
--- Stability   :  experimental
+-- Stability   :  stable
 -- Portability :  portable
 --
 -- A type @a@ is a 'Monoid' if it provides an associative function ('<>')
@@ -30,7 +30,7 @@
 -- The 'Sum' monoid is defined by the numerical addition operator and `0` as neutral element:
 --
 -- >>> mempty :: Sum Int
--- Sum 0
+-- Sum {getSum = 0}
 -- >>> Sum 1 <> Sum 2 <> Sum 3 <> Sum 4 :: Sum Int
 -- Sum {getSum = 10}
 --
@@ -122,23 +122,23 @@ import Data.Semigroup.Internal
 -- @
 
 
--- | Maybe monoid returning the leftmost non-Nothing value.
+-- | Maybe monoid returning the leftmost non-'Nothing' value.
 --
 -- @'First' a@ is isomorphic to @'Alt' 'Maybe' a@, but precedes it
 -- historically.
 --
--- >>> getFirst (First (Just "hello") <> First Nothing <> First (Just "world"))
--- Just "hello"
+-- Beware that @Data.Monoid.@'First' is different from
+-- @Data.Semigroup.@'Data.Semigroup.First'. The former returns the first non-'Nothing',
+-- so @Data.Monoid.First Nothing <> x = x@. The latter simply returns the first value,
+-- thus @Data.Semigroup.First Nothing <> x = Data.Semigroup.First Nothing@.
 --
--- Use of this type is discouraged. Note the following equivalence:
+-- ==== __Examples__
 --
--- > Data.Monoid.First x === Maybe (Data.Semigroup.First x)
+-- >>> First (Just "hello") <> First Nothing <> First (Just "world")
+-- First {getFirst = Just "hello"}
 --
--- In addition to being equivalent in the structural sense, the two
--- also have 'Monoid' instances that behave the same. This type will
--- be marked deprecated in GHC 8.8, and removed in GHC 8.10.
--- Users are advised to use the variant from "Data.Semigroup" and wrap
--- it in 'Maybe'.
+-- >>> First Nothing <> mempty
+-- First {getFirst = Nothing}
 newtype First a = First { getFirst :: Maybe a }
         deriving ( Eq          -- ^ @since 2.01
                  , Ord         -- ^ @since 2.01
@@ -161,23 +161,22 @@ instance Semigroup (First a) where
 instance Monoid (First a) where
         mempty = First Nothing
 
--- | Maybe monoid returning the rightmost non-Nothing value.
+-- | Maybe monoid returning the rightmost non-'Nothing' value.
 --
 -- @'Last' a@ is isomorphic to @'Dual' ('First' a)@, and thus to
 -- @'Dual' ('Alt' 'Maybe' a)@
 --
--- >>> getLast (Last (Just "hello") <> Last Nothing <> Last (Just "world"))
--- Just "world"
+-- @Data.Semigroup.@'Data.Semigroup.Last'. The former returns the last non-'Nothing',
+-- so @x <> Data.Monoid.Last Nothing = x@. The latter simply returns the last value,
+-- thus @x <> Data.Semigroup.Last Nothing = Data.Semigroup.Last Nothing@.
 --
--- Use of this type is discouraged. Note the following equivalence:
+-- ==== __Examples__
 --
--- > Data.Monoid.Last x === Maybe (Data.Semigroup.Last x)
+-- >>> Last (Just "hello") <> Last Nothing <> Last (Just "world")
+-- Last {getLast = Just "world"}
 --
--- In addition to being equivalent in the structural sense, the two
--- also have 'Monoid' instances that behave the same. This type will
--- be marked deprecated in GHC 8.8, and removed in GHC 8.10.
--- Users are advised to use the variant from "Data.Semigroup" and wrap
--- it in 'Maybe'.
+-- >>> Last Nothing <> mempty
+-- Last {getLast = Nothing}
 newtype Last a = Last { getLast :: Maybe a }
         deriving ( Eq          -- ^ @since 2.01
                  , Ord         -- ^ @since 2.01
@@ -202,6 +201,14 @@ instance Monoid (Last a) where
 
 -- | This data type witnesses the lifting of a 'Monoid' into an
 -- 'Applicative' pointwise.
+--
+-- ==== __Examples__
+--
+-- >>> Ap (Just [1, 2, 3]) <> Ap Nothing
+-- Ap {getAp = Nothing}
+--
+-- >>> Ap [Sum 10, Sum 20] <> Ap [Sum 1, Sum 2]
+-- Ap {getAp = [Sum {getSum = 11},Sum {getSum = 12},Sum {getSum = 21},Sum {getSum = 22}]}
 --
 -- @since 4.12.0.0
 newtype Ap f a = Ap { getAp :: f a }
@@ -233,7 +240,33 @@ instance (Applicative f, Bounded a) => Bounded (Ap f a) where
   minBound = pure minBound
   maxBound = pure maxBound
 
--- | @since 4.12.0.0
+-- | Note that even if the underlying 'Num' and 'Applicative' instances are
+-- lawful, for most 'Applicative's, this instance will not be lawful. If you use
+-- this instance with the list 'Applicative', the following customary laws will
+-- not hold:
+--
+-- Commutativity:
+--
+-- >>> Ap [10,20] + Ap [1,2]
+-- Ap {getAp = [11,12,21,22]}
+-- >>> Ap [1,2] + Ap [10,20]
+-- Ap {getAp = [11,21,12,22]}
+--
+-- Additive inverse:
+--
+-- >>> Ap [] + negate (Ap [])
+-- Ap {getAp = []}
+-- >>> fromInteger 0 :: Ap [] Int
+-- Ap {getAp = [0]}
+--
+-- Distributivity:
+--
+-- >>> Ap [1,2] * (3 + 4)
+-- Ap {getAp = [7,14]}
+-- >>> (Ap [1,2] * 3) + (Ap [1,2] * 4)
+-- Ap {getAp = [7,11,10,14]}
+--
+-- @since 4.12.0.0
 instance (Applicative f, Num a) => Num (Ap f a) where
   (+)         = liftA2 (+)
   (*)         = liftA2 (*)

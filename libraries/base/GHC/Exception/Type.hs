@@ -1,10 +1,7 @@
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE Trustworthy #-}
-{-# LANGUAGE NoImplicitPrelude
-           , ExistentialQuantification
-           , MagicHash
-           , RecordWildCards
-           , PatternSynonyms
-  #-}
+
 {-# OPTIONS_HADDOCK not-home #-}
 
 -----------------------------------------------------------------------------
@@ -145,6 +142,9 @@ class (Typeable e, Show e) => Exception e where
     -- @since 4.8.0.0
     displayException :: e -> String
     displayException = show
+
+-- | @since 4.8.0.0
+instance Exception Void
 
 -- | @since 3.0
 instance Exception SomeException where

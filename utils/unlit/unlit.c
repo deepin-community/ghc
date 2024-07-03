@@ -20,7 +20,7 @@
  * 1) Empty script files are not permitted.  A file in which no lines
  *    begin with `>' usually indicates a file in which the programmer
  *    has forgotten about the literate script convention.
- * 2) A line containing part of program definition (i.e. preceeded by `>')
+ * 2) A line containing part of program definition (i.e. preceded by `>')
  *    cannot be used immediately before or after a comment line unless
  *    the comment line is blank.  This error usually indicates that
  *    the `>' character has been omitted from a line in a section of
@@ -166,7 +166,7 @@ static int egetc(FILE *istream)
  * Lines of type DEFN are copied to the output stream `ostream'
  * (without the leading DEFNCHAR).  BLANK and TEXT lines are
  * replaced by empty (i.e. blank lines) in the output stream, so
- * that error messages refering to line numbers in the output file
+ * that error messages referring to line numbers in the output file
  * can also be used to locate the corresponding line in the input
  * stream.
  */
@@ -224,9 +224,9 @@ static line readline(FILE *istream, FILE *ostream) {
     while(i > 0 && isspace(buf[i-1]))
 	i--;
     buf[i] = 0;
-    if (strcmp(buf, BEGINCODE) == 0)
+    if (strncmp(buf, BEGINCODE, LENBEGINCODE) == 0)
 	return BEGIN;
-    if (strcmp(buf, ENDCODE) == 0)
+    if (strncmp(buf, ENDCODE, LENENDCODE) == 0)
 	return END;
 #if defined(PSEUDOCODE)
     else if (strcmp(buf, BEGINPSEUDOCODE) == 0)

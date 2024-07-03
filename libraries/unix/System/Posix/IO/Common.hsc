@@ -1,11 +1,7 @@
 {-# LANGUAGE CApiFFI #-}
 {-# LANGUAGE NondecreasingIndentation #-}
 {-# LANGUAGE RecordWildCards #-}
-#if __GLASGOW_HASKELL__ >= 709
 {-# LANGUAGE Safe #-}
-#else
-{-# LANGUAGE Trustworthy #-}
-#endif
 
 -----------------------------------------------------------------------------
 -- |
@@ -28,14 +24,13 @@ module System.Posix.IO.Common (
     -- ** Opening and closing files
     OpenMode(..),
     OpenFileFlags(..), defaultFileFlags,
-    open_,
+    openat_,
     closeFd,
 
     -- ** Reading\/writing data
     -- |Programmers using the 'fdRead' and 'fdWrite' API should be aware that
     -- EAGAIN exceptions may occur for non-blocking IO!
 
-    fdRead, fdWrite,
     fdReadBuf, fdWriteBuf,
 
     -- ** Seeking
@@ -79,7 +74,21 @@ import qualified GHC.IO.Handle.FD as FD
 import GHC.IO.Exception
 import Data.Typeable (cast)
 
+#if !defined(HAVE_PIPE)
+import System.IO.Error ( ioeSetLocation )
+import GHC.IO.Exception ( unsupportedOperation )
+#endif
+
 #include "HsUnix.h"
+
+#if !defined(HAVE_PIPE)
+
+createPipe :: IO (Fd, Fd)
+{-# WARNING createPipe
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_PIPE@)" #-}
+createPipe = ioError (ioeSetLocation unsupportedOperation "createPipe")
+
+#else
 
 -- -----------------------------------------------------------------------------
 -- Pipes
@@ -101,6 +110,22 @@ createPipe =
 foreign import ccall unsafe "pipe"
    c_pipe :: Ptr CInt -> IO CInt
 
+#endif // HAVE_PIPE
+
+#if !defined(HAVE_DUP)
+
+dup :: Fd -> IO Fd
+{-# WARNING dup
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_DUP@)" #-}
+dup _ = ioError (ioeSetLocation unsupportedOperation "dup")
+
+dupTo :: Fd -> Fd -> IO Fd
+{-# WARNING dupTo
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_DUP@)" #-}
+dupTo _ _ = ioError (ioeSetLocation unsupportedOperation "dupTo")
+
+#else
+
 -- -----------------------------------------------------------------------------
 -- Duplicating file descriptors
 
@@ -120,6 +145,8 @@ foreign import ccall unsafe "dup"
 foreign import ccall unsafe "dup2"
    c_dup2 :: CInt -> CInt -> IO CInt
 
+#endif // HAVE_DUP
+
 -- -----------------------------------------------------------------------------
 -- Opening and closing files
 
@@ -129,20 +156,41 @@ stdOutput  = Fd (#const STDOUT_FILENO)
 stdError   = Fd (#const STDERR_FILENO)
 
 data OpenMode = ReadOnly | WriteOnly | ReadWrite
+              deriving (Read, Show, Eq, Ord)
 
 -- |Correspond to some of the int flags from C's fcntl.h.
 data OpenFileFlags =
  OpenFileFlags {
-    append    :: Bool, -- ^ O_APPEND
-    exclusive :: Bool, -- ^ O_EXCL
-    noctty    :: Bool, -- ^ O_NOCTTY
-    nonBlock  :: Bool, -- ^ O_NONBLOCK
-    trunc     :: Bool  -- ^ O_TRUNC
+    append    :: Bool,           -- ^ O_APPEND
+    exclusive :: Bool,           -- ^ O_EXCL, result is undefined if O_CREAT is False
+                                 --
+                                 -- __NOTE__: Result is undefined if 'creat' is 'Nothing'.
+    noctty    :: Bool,           -- ^ O_NOCTTY
+    nonBlock  :: Bool,           -- ^ O_NONBLOCK
+    trunc     :: Bool,           -- ^ O_TRUNC
+    nofollow  :: Bool,           -- ^ O_NOFOLLOW
+                                 --
+                                 -- @since 2.8.0.0
+    creat     :: Maybe FileMode, -- ^ O_CREAT
+                                 --
+                                 -- @since 2.8.0.0
+    cloexec   :: Bool,           -- ^ O_CLOEXEC
+                                 --
+                                 -- @since 2.8.0.0
+    directory :: Bool,           -- ^ O_DIRECTORY
+                                 --
+                                 -- @since 2.8.0.0
+    sync      :: Bool            -- ^ O_SYNC
+                                 --
+                                 -- @since 2.8.0.0
  }
+ deriving (Read, Show, Eq, Ord)
 
 
--- |Default values for the 'OpenFileFlags' type. False for each of
--- append, exclusive, noctty, nonBlock, and trunc.
+-- | Default values for the 'OpenFileFlags' type.
+--
+-- Each field of 'OpenFileFlags' is either 'False' or 'Nothing'
+-- respectively.
 defaultFileFlags :: OpenFileFlags
 defaultFileFlags =
  OpenFileFlags {
@@ -150,32 +198,43 @@ defaultFileFlags =
     exclusive = False,
     noctty    = False,
     nonBlock  = False,
-    trunc     = False
+    trunc     = False,
+    nofollow  = False,
+    creat     = Nothing,
+    cloexec   = False,
+    directory = False,
+    sync      = False
   }
 
 
--- |Open and optionally create this file.  See 'System.Posix.Files'
--- for information on how to use the 'FileMode' type.
-open_  :: CString
-       -> OpenMode
-       -> Maybe FileMode -- ^Just x => creates the file with the given modes, Nothing => the file must exist.
-       -> OpenFileFlags
-       -> IO Fd
-open_ str how maybe_mode (OpenFileFlags appendFlag exclusiveFlag nocttyFlag
-                                nonBlockFlag truncateFlag) = do
-    fd <- c_open str all_flags mode_w
-    return (Fd fd)
+-- |Open and optionally create a file relative to an optional
+-- directory file descriptor.
+openat_  :: Maybe Fd -- ^ Optional directory file descriptor
+         -> CString -- ^ Pathname to open
+         -> OpenMode -- ^ Read-only, read-write or write-only
+         -> OpenFileFlags -- ^ Append, exclusive, etc.
+         -> IO Fd
+openat_ fdMay str how (OpenFileFlags appendFlag exclusiveFlag nocttyFlag
+                                nonBlockFlag truncateFlag nofollowFlag
+                                creatFlag cloexecFlag directoryFlag
+                                syncFlag) =
+    Fd <$> c_openat c_fd str all_flags mode_w
   where
+    c_fd = maybe (#const AT_FDCWD) (\ (Fd fd) -> fd) fdMay
     all_flags  = creat .|. flags .|. open_mode
 
     flags =
-       (if appendFlag    then (#const O_APPEND)   else 0) .|.
-       (if exclusiveFlag then (#const O_EXCL)     else 0) .|.
-       (if nocttyFlag    then (#const O_NOCTTY)   else 0) .|.
-       (if nonBlockFlag  then (#const O_NONBLOCK) else 0) .|.
-       (if truncateFlag  then (#const O_TRUNC)    else 0)
+       (if appendFlag       then (#const O_APPEND)    else 0) .|.
+       (if exclusiveFlag    then (#const O_EXCL)      else 0) .|.
+       (if nocttyFlag       then (#const O_NOCTTY)    else 0) .|.
+       (if nonBlockFlag     then (#const O_NONBLOCK)  else 0) .|.
+       (if truncateFlag     then (#const O_TRUNC)     else 0) .|.
+       (if nofollowFlag     then (#const O_NOFOLLOW)  else 0) .|.
+       (if cloexecFlag      then (#const O_CLOEXEC)   else 0) .|.
+       (if directoryFlag    then (#const O_DIRECTORY) else 0) .|.
+       (if syncFlag         then (#const O_SYNC)      else 0)
 
-    (creat, mode_w) = case maybe_mode of
+    (creat, mode_w) = case creatFlag of
                         Nothing -> (0,0)
                         Just x  -> ((#const O_CREAT), x)
 
@@ -184,14 +243,20 @@ open_ str how maybe_mode (OpenFileFlags appendFlag exclusiveFlag nocttyFlag
                    WriteOnly -> (#const O_WRONLY)
                    ReadWrite -> (#const O_RDWR)
 
-foreign import capi unsafe "HsUnix.h open"
-   c_open :: CString -> CInt -> CMode -> IO CInt
+foreign import capi unsafe "HsUnix.h openat"
+   c_openat :: CInt -> CString -> CInt -> CMode -> IO CInt
 
 -- |Close this file descriptor.  May throw an exception if this is an
 -- invalid descriptor.
 
 closeFd :: Fd -> IO ()
 closeFd (Fd fd) = throwErrnoIfMinus1_ "closeFd" (c_close fd)
+-- Here we don't to retry on EINTR because according to
+--  http://pubs.opengroup.org/onlinepubs/9699919799/functions/close.html
+-- "with errno set to [EINTR] [...] the state of fildes is unspecified"
+-- and on Linux, already the first close() removes the FD from the process's
+-- FD table so closing a second time is invalid
+-- (see http://man7.org/linux/man-pages/man2/close.2.html#NOTES).
 
 foreign import ccall unsafe "HsUnix.h close"
    c_close :: CInt -> IO CInt
@@ -200,7 +265,15 @@ foreign import ccall unsafe "HsUnix.h close"
 -- Converting file descriptors to/from Handles
 
 -- | Extracts the 'Fd' from a 'Handle'.  This function has the side effect
--- of closing the 'Handle' and flushing its write buffer, if necessary.
+-- of closing the 'Handle' (and flushing its write buffer, if necessary),
+-- without closing the underlying 'Fd'.
+--
+-- __Warning:__ This means you take over ownership of the underlying 'Fd'.
+-- 'hClose` on the 'Handle' will no longer have any effect.
+-- This will break common patterns to avoid file descriptor leaks,
+-- such as using 'hClose' in the cleanup action of @Control.Exception.bracket@,
+-- making it a silent no-op.
+-- Be sure to close the returned 'Fd' yourself to not leak it.
 handleToFd :: Handle -> IO Fd
 
 -- | Converts an 'Fd' into a 'Handle' that can be used with the
@@ -292,6 +365,25 @@ data LockRequest = ReadLock
 
 type FileLock = (LockRequest, SeekMode, FileOffset, FileOffset)
 
+#if !defined(HAVE_F_GETLK)
+
+getLock :: Fd -> FileLock -> IO (Maybe (ProcessID, FileLock))
+{-# WARNING getLock
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_F_GETLK@)" #-}
+getLock _ _ = ioError (ioeSetLocation unsupportedOperation "getLock")
+
+setLock :: Fd -> FileLock -> IO ()
+{-# WARNING setLock
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_F_GETLK@)" #-}
+setLock _ _ = ioError (ioeSetLocation unsupportedOperation "setLock")
+
+waitToSetLock :: Fd -> FileLock -> IO ()
+{-# WARNING waitToSetLock
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_F_GETLK@)" #-}
+waitToSetLock _ _ = ioError (ioeSetLocation unsupportedOperation "waitToSetLock")
+
+#else
+
 -- | May throw an exception if this is an invalid descriptor.
 getLock :: Fd -> FileLock -> IO (Maybe (ProcessID, FileLock))
 getLock (Fd fd) lock =
@@ -351,24 +443,10 @@ waitToSetLock (Fd fd) lock = do
     throwErrnoIfMinus1_ "waitToSetLock"
         (Base.c_fcntl_lock fd (#const F_SETLKW) p_flock)
 
--- -----------------------------------------------------------------------------
--- fd{Read,Write}
+#endif // HAVE_F_GETLK
 
--- | Read data from an 'Fd' and convert it to a 'String' using the locale encoding.
--- Throws an exception if this is an invalid descriptor, or EOF has been
--- reached.
-fdRead :: Fd
-       -> ByteCount -- ^How many bytes to read
-       -> IO (String, ByteCount) -- ^The bytes read, how many bytes were read.
-fdRead _fd 0 = return ("", 0)
-fdRead fd nbytes = do
-    allocaBytes (fromIntegral nbytes) $ \ buf -> do
-    rc <- fdReadBuf fd buf nbytes
-    case rc of
-      0 -> ioError (ioeSetErrorString (mkIOError EOF "fdRead" Nothing Nothing) "EOF")
-      n -> do
-       s <- peekCStringLen (castPtr buf, fromIntegral n)
-       return (s, n)
+-- -----------------------------------------------------------------------------
+-- fd{Read,Write}Buf
 
 -- | Read data from an 'Fd' into memory.  This is exactly equivalent
 -- to the POSIX @read@ function.
@@ -384,12 +462,6 @@ fdReadBuf fd buf nbytes =
 
 foreign import ccall safe "read"
    c_safe_read :: CInt -> Ptr CChar -> CSize -> IO CSsize
-
--- | Write a 'String' to an 'Fd' using the locale encoding.
-fdWrite :: Fd -> String -> IO ByteCount
-fdWrite fd str =
-  withCStringLen str $ \ (buf,len) ->
-    fdWriteBuf fd (castPtr buf) (fromIntegral len)
 
 -- | Write data from memory to an 'Fd'.  This is exactly equivalent
 -- to the POSIX @write@ function.

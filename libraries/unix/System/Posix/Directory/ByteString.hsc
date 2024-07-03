@@ -1,10 +1,6 @@
 {-# LANGUAGE CApiFFI #-}
 {-# LANGUAGE NondecreasingIndentation #-}
-#if __GLASGOW_HASKELL__ >= 709
 {-# LANGUAGE Safe #-}
-#else
-{-# LANGUAGE Trustworthy #-}
-#endif
 
 -----------------------------------------------------------------------------
 -- |
@@ -35,6 +31,7 @@ module System.Posix.Directory.ByteString (
    DirStream,
    openDirStream,
    readDirStream,
+   readDirStreamMaybe,
    rewindDirStream,
    closeDirStream,
    DirStreamOffset,
@@ -45,13 +42,13 @@ module System.Posix.Directory.ByteString (
    seekDirStream,
 #endif
 
-   -- * The working dirctory
+   -- * The working directory
    getWorkingDirectory,
    changeWorkingDirectory,
    changeWorkingDirectoryFd,
   ) where
 
-import System.IO.Error
+import Data.Maybe
 import System.Posix.Types
 import Foreign
 import Foreign.C
@@ -89,8 +86,20 @@ foreign import capi unsafe "HsUnix.h opendir"
 --   next directory entry (@struct dirent@) for the open directory
 --   stream @dp@, and returns the @d_name@ member of that
 --  structure.
+--
+--  Note that this function returns an empty filepath if the end of the
+--  directory stream is reached. For a safer alternative use
+--  'readDirStreamMaybe'.
 readDirStream :: DirStream -> IO RawFilePath
-readDirStream (DirStream dirp) =
+readDirStream = fmap (fromMaybe BC.empty) . readDirStreamMaybe
+
+-- | @readDirStreamMaybe dp@ calls @readdir@ to obtain the
+--   next directory entry (@struct dirent@) for the open directory
+--   stream @dp@. It returns the @d_name@ member of that
+--  structure wrapped in a @Just d_name@ if an entry was read and @Nothing@ if
+--  the end of the directory stream was reached.
+readDirStreamMaybe :: DirStream -> IO (Maybe RawFilePath)
+readDirStreamMaybe (DirStream dirp) =
   alloca $ \ptr_dEnt  -> loop ptr_dEnt
  where
   loop ptr_dEnt = do
@@ -99,16 +108,16 @@ readDirStream (DirStream dirp) =
     if (r == 0)
          then do dEnt <- peek ptr_dEnt
                  if (dEnt == nullPtr)
-                    then return BC.empty
+                    then return Nothing
                     else do
                      entry <- (d_name dEnt >>= peekFilePath)
                      c_freeDirEnt dEnt
-                     return entry
+                     return $ Just entry
          else do errno <- getErrno
                  if (errno == eINTR) then loop ptr_dEnt else do
                  let (Errno eo) = errno
                  if (eo == 0)
-                    then return BC.empty
+                    then return Nothing
                     else throwErrno "readDirStream"
 
 -- traversing directories
@@ -148,18 +157,16 @@ foreign import ccall unsafe "getcwd"
 --   the current working directory to @dir@.
 changeWorkingDirectory :: RawFilePath -> IO ()
 changeWorkingDirectory path =
-  modifyIOError (`ioeSetFileName` (BC.unpack path)) $
-    withFilePath path $ \s ->
-       throwErrnoIfMinus1Retry_ "changeWorkingDirectory" (c_chdir s)
+  withFilePath path $ \s ->
+     throwErrnoPathIfMinus1Retry_ "changeWorkingDirectory" path (c_chdir s)
 
 foreign import ccall unsafe "chdir"
    c_chdir :: CString -> IO CInt
 
 removeDirectory :: RawFilePath -> IO ()
 removeDirectory path =
-  modifyIOError (`ioeSetFileName` BC.unpack path) $
-    withFilePath path $ \s ->
-       throwErrnoIfMinus1Retry_ "removeDirectory" (c_rmdir s)
+  withFilePath path $ \s ->
+     throwErrnoPathIfMinus1Retry_ "removeDirectory" path (c_rmdir s)
 
 foreign import ccall unsafe "rmdir"
    c_rmdir :: CString -> IO CInt

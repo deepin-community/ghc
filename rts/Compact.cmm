@@ -13,6 +13,10 @@
 import CLOSURE base_GHCziIOziException_cannotCompactFunction_closure;
 import CLOSURE base_GHCziIOziException_cannotCompactMutable_closure;
 import CLOSURE base_GHCziIOziException_cannotCompactPinned_closure;
+#if !defined(UnregisterisedCompiler)
+import CLOSURE g0;
+import CLOSURE large_alloc_lim;
+#endif
 
 //
 // Allocate space for a new object in the compact region.  We first try
@@ -96,7 +100,7 @@ eval:
 
     // Follow indirections:
     case IND, IND_STATIC: {
-        p = StgInd_indirectee(p);
+        p = %acquire StgInd_indirectee(p);
         goto eval;
     }
 
@@ -133,7 +137,8 @@ eval:
         FUN_0_2,
         FUN_STATIC,
         BCO,
-        PAP: {
+        PAP,
+        CONTINUATION: {
         jump stg_raisezh(base_GHCziIOziException_cannotCompactFunction_closure);
     }
 
@@ -224,7 +229,7 @@ eval:
         CONSTR_1_1: {
 
         (should) = ccall shouldCompact(compact "ptr", p "ptr");
-        if (should == SHOULDCOMPACT_IN_CNF) { P_[pp] = p; return(); }
+        if (should == SHOULDCOMPACT_IN_CNF) { P_[pp] = tag | p; return(); }
 
       constructor:
 
@@ -274,12 +279,12 @@ eval:
 
         (should) = ccall shouldCompact(compact "ptr", p "ptr");
         if (should == SHOULDCOMPACT_IN_CNF ||
-            should == SHOULDCOMPACT_STATIC) { P_[pp] = p; return(); }
+            should == SHOULDCOMPACT_STATIC) { P_[pp] = tag | p; return(); }
 
         goto constructor;
     }}
 
-    ccall barf("stg_compactWorkerzh");
+    ccall barf("stg_compactWorkerzh", NULL);
 }
 
 //
@@ -297,7 +302,7 @@ stg_compactAddWithSharingzh (P_ compact, P_ p)
     StgCompactNFData_hash(compact) = hash;
 
     // Note [compactAddWorker result]
-    //
+    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     // compactAddWorker needs somewhere to store the result - this is
     // so that it can be tail-recursive.  It must be an address that
     // doesn't move during GC, so we can't use heap or stack.

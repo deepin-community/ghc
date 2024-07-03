@@ -1,13 +1,10 @@
 {-# LANGUAGE CPP                        #-}
-{-# LANGUAGE DefaultSignatures          #-}
 {-# LANGUAGE DeriveDataTypeable         #-}
 {-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE FlexibleContexts           #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE PolyKinds                  #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE Trustworthy                #-}
-{-# LANGUAGE TypeOperators              #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -23,12 +20,13 @@
 -- that lets you combine any two values of type @a@ into one. Where being
 -- associative means that the following must always hold:
 --
--- >>> (a <> b) <> c == a <> (b <> c)
+-- prop> (a <> b) <> c == a <> (b <> c)
 --
 -- ==== __Examples__
 --
 -- The 'Min' 'Semigroup' instance for 'Int' is defined to always pick the smaller
 -- number:
+--
 -- >>> Min 1 <> Min 2 <> Min 3 <> Min 4 :: Min Int
 -- Min {getMin = 1}
 --
@@ -39,9 +37,10 @@
 -- can never be empty:
 --
 -- >>> (1 :| [])
--- 1 :| []               -- equivalent to [1] but guaranteed to be non-empty
+-- 1 :| []               -- equivalent to [1] but guaranteed to be non-empty.
+--
 -- >>> (1 :| [2, 3, 4])
--- 1 :| [2,3,4]          -- equivalent to [1,2,3,4] but guaranteed to be non-empty
+-- 1 :| [2,3,4]          -- equivalent to [1,2,3,4] but guaranteed to be non-empty.
 --
 -- Equipped with this guaranteed to be non-empty data structure, we can combine
 -- values using 'sconcat' and a 'Semigroup' of our choosing. We can try the 'Min'
@@ -50,6 +49,7 @@
 --
 -- >>> sconcat (1 :| [2, 3, 4]) :: Min Int
 -- Min {getMin = 1}
+--
 -- >>> sconcat (1 :| [2, 3, 4]) :: Max Int
 -- Max {getMax = 4}
 --
@@ -91,9 +91,6 @@ module Data.Semigroup (
   , Any(..)
   , Sum(..)
   , Product(..)
-  -- * A better monoid for Maybe
-  , Option(..)
-  , option
   -- * Difference lists of a semigroup
   , diff
   , cycle1
@@ -103,14 +100,13 @@ module Data.Semigroup (
   , ArgMax
   ) where
 
-import           Prelude             hiding (foldr1)
+import           Prelude             hiding (foldr1, Applicative(..))
 
 import GHC.Base (Semigroup(..))
 
 import           Data.Semigroup.Internal
 
 import           Control.Applicative
-import           Control.Monad
 import           Control.Monad.Fix
 import           Data.Bifoldable
 import           Data.Bifunctor
@@ -118,16 +114,64 @@ import           Data.Bitraversable
 import           Data.Coerce
 import           Data.Data
 import           GHC.Generics
+import qualified GHC.List as List
+
+-- $setup
+-- >>> import Prelude
+-- >>> import Data.List.NonEmpty (NonEmpty (..))
 
 -- | A generalization of 'Data.List.cycle' to an arbitrary 'Semigroup'.
 -- May fail to terminate for some values in some semigroups.
+--
+-- ==== __Examples__
+--
+-- >>> take 10 $ cycle1 [1, 2, 3]
+-- [1,2,3,1,2,3,1,2,3,1]
+--
+-- >>> cycle1 (Right 1)
+-- Right 1
+--
+-- >>> cycle1 (Left 1)
+-- * hangs forever *
 cycle1 :: Semigroup m => m -> m
 cycle1 xs = xs' where xs' = xs <> xs'
 
 -- | This lets you use a difference list of a 'Semigroup' as a 'Monoid'.
+--
+-- ==== __Examples__
+--
+-- > let hello = diff "Hello, "
+--
+-- >>> appEndo hello "World!"
+-- "Hello, World!"
+--
+-- >>> appEndo (hello <> mempty) "World!"
+-- "Hello, World!"
+--
+-- >>> appEndo (mempty <> hello) "World!"
+-- "Hello, World!"
+--
+-- > let world = diff "World"
+-- > let excl = diff "!"
+--
+-- >>> appEndo (hello <> (world <> excl)) mempty
+-- "Hello, World!"
+--
+-- >>> appEndo ((hello <> world) <> excl) mempty
+-- "Hello, World!"
 diff :: Semigroup m => m -> Endo m
 diff = Endo . (<>)
 
+-- | The 'Min' 'Monoid' and 'Semigroup' always choose the smaller element as
+-- by the 'Ord' instance and 'min' of the contained type.
+--
+-- ==== __Examples__
+--
+-- >>> Min 42 <> Min 3
+-- Min 3
+--
+-- >>> sconcat $ Min 1 :| [ Min n | n <- [2 .. 100]]
+-- Min {getMin = 1}
 newtype Min a = Min { getMin :: a }
   deriving ( Bounded  -- ^ @since 4.9.0.0
            , Eq       -- ^ @since 4.9.0.0
@@ -159,6 +203,10 @@ instance Ord a => Semigroup (Min a) where
 -- | @since 4.9.0.0
 instance (Ord a, Bounded a) => Monoid (Min a) where
   mempty = maxBound
+  -- By default, we would get a lazy right fold. This forces the use of a strict
+  -- left fold instead.
+  mconcat = List.foldl' (<>) mempty
+  {-# INLINE mconcat #-}
 
 -- | @since 4.9.0.0
 instance Functor Min where
@@ -199,6 +247,16 @@ instance Num a => Num (Min a) where
   signum (Min a) = Min (signum a)
   fromInteger    = Min . fromInteger
 
+-- | The 'Max' 'Monoid' and 'Semigroup' always choose the bigger element as
+-- by the 'Ord' instance and 'max' of the contained type.
+--
+-- ==== __Examples__
+--
+-- >>> Max 42 <> Max 3
+-- Max 42
+--
+-- >>> sconcat $ Max 1 :| [ Max n | n <- [2 .. 100]]
+-- Max {getMax = 100}
 newtype Max a = Max { getMax :: a }
   deriving ( Bounded  -- ^ @since 4.9.0.0
            , Eq       -- ^ @since 4.9.0.0
@@ -229,6 +287,10 @@ instance Ord a => Semigroup (Max a) where
 -- | @since 4.9.0.0
 instance (Ord a, Bounded a) => Monoid (Max a) where
   mempty = minBound
+  -- By default, we would get a lazy right fold. This forces the use of a strict
+  -- left fold instead.
+  mconcat = List.foldl' (<>) mempty
+  {-# INLINE mconcat #-}
 
 -- | @since 4.9.0.0
 instance Functor Max where
@@ -271,7 +333,23 @@ instance Num a => Num (Max a) where
 
 -- | 'Arg' isn't itself a 'Semigroup' in its own right, but it can be
 -- placed inside 'Min' and 'Max' to compute an arg min or arg max.
-data Arg a b = Arg a b deriving
+--
+-- ==== __Examples__
+--
+-- >>> minimum [ Arg (x * x) x | x <- [-10 .. 10] ]
+-- Arg 0 0
+--
+-- >>> maximum [ Arg (-0.2*x^2 + 1.5*x + 1) x | x <- [-10 .. 10] ]
+-- Arg 3.8 4.0
+--
+-- >>> minimum [ Arg (-0.2*x^2 + 1.5*x + 1) x | x <- [-10 .. 10] ]
+-- Arg (-34.0) (-10.0)
+data Arg a b = Arg
+  a
+  -- ^ The argument used for comparisons in 'Eq' and 'Ord'.
+  b
+  -- ^ The "value" exposed via the 'Functor', 'Foldable' etc. instances.
+  deriving
   ( Show     -- ^ @since 4.9.0.0
   , Read     -- ^ @since 4.9.0.0
   , Data     -- ^ @since 4.9.0.0
@@ -279,7 +357,24 @@ data Arg a b = Arg a b deriving
   , Generic1 -- ^ @since 4.9.0.0
   )
 
+-- |
+-- ==== __Examples__
+--
+-- >>> Min (Arg 0 ()) <> Min (Arg 1 ())
+-- Min {getMin = Arg 0 ()}
+--
+-- >>> minimum [ Arg (length name) name | name <- ["violencia", "lea", "pixie"]]
+-- Arg 3 "lea"
 type ArgMin a b = Min (Arg a b)
+
+-- |
+-- ==== __Examples__
+--
+-- >>> Max (Arg 0 ()) <> Max (Arg 1 ())
+-- Max {getMax = Arg 1 ()}
+--
+-- >>> maximum [ Arg (length name) name | name <- ["violencia", "lea", "pixie"]]
+-- Arg 9 "violencia"
 type ArgMax a b = Max (Arg a b)
 
 -- | @since 4.9.0.0
@@ -320,8 +415,20 @@ instance Bifoldable Arg where
 instance Bitraversable Arg where
   bitraverse f g (Arg a b) = Arg <$> f a <*> g b
 
--- | Use @'Option' ('First' a)@ to get the behavior of
--- 'Data.Monoid.First' from "Data.Monoid".
+-- |
+-- Beware that @Data.Semigroup.@'First' is different from
+-- @Data.Monoid.@'Data.Monoid.First'. The former simply returns the first value,
+-- so @Data.Semigroup.First Nothing <> x = Data.Semigroup.First Nothing@.
+-- The latter returns the first non-'Nothing',
+-- thus @Data.Monoid.First Nothing <> x = x@.
+--
+-- ==== __Examples__
+--
+-- >>> First 0 <> First 10
+-- First 0
+--
+-- >>> sconcat $ First 1 :| [ First n | n <- [2 ..] ]
+-- First 1
 newtype First a = First { getFirst :: a }
   deriving ( Bounded  -- ^ @since 4.9.0.0
            , Eq       -- ^ @since 4.9.0.0
@@ -378,8 +485,20 @@ instance Monad First where
 instance MonadFix First where
   mfix f = fix (f . getFirst)
 
--- | Use @'Option' ('Last' a)@ to get the behavior of
--- 'Data.Monoid.Last' from "Data.Monoid"
+-- |
+-- Beware that @Data.Semigroup.@'Last' is different from
+-- @Data.Monoid.@'Data.Monoid.Last'. The former simply returns the last value,
+-- so @x <> Data.Semigroup.Last Nothing = Data.Semigroup.Last Nothing@.
+-- The latter returns the last non-'Nothing',
+-- thus @x <> Data.Monoid.Last Nothing = x@.
+--
+-- ==== __Examples__
+--
+-- >>> Last 0 <> Last 10
+-- Last {getLast = 10}
+--
+-- >>> sconcat $ Last 1 :| [ Last n | n <- [2..]]
+-- Last {getLast = * hangs forever *
 newtype Last a = Last { getLast :: a }
   deriving ( Bounded  -- ^ @since 4.9.0.0
            , Eq       -- ^ @since 4.9.0.0
@@ -459,6 +578,9 @@ instance Monoid m => Semigroup (WrappedMonoid m) where
 -- | @since 4.9.0.0
 instance Monoid m => Monoid (WrappedMonoid m) where
   mempty = WrapMonoid mempty
+  -- This ensures that we use whatever mconcat is defined for the wrapped
+  -- Monoid.
+  mconcat = coerce (mconcat :: [m] -> m)
 
 -- | @since 4.9.0.0
 instance Enum a => Enum (WrappedMonoid a) where
@@ -476,93 +598,38 @@ instance Enum a => Enum (WrappedMonoid a) where
 --
 -- > mtimesDefault n a = a <> a <> ... <> a  -- using <> (n-1) times
 --
--- Implemented using 'stimes' and 'mempty'.
+-- In many cases, @'stimes' 0 a@ for a `Monoid` will produce `mempty`.
+-- However, there are situations when it cannot do so. In particular,
+-- the following situation is fairly common:
 --
--- This is a suitable definition for an 'mtimes' member of 'Monoid'.
+-- @
+-- data T a = ...
+--
+-- class Constraint1 a
+-- class Constraint1 a => Constraint2 a
+-- @
+--
+-- @
+-- instance Constraint1 a => 'Semigroup' (T a)
+-- instance Constraint2 a => 'Monoid' (T a)
+-- @
+--
+-- Since @Constraint1@ is insufficient to implement 'mempty',
+-- 'stimes' for @T a@ cannot do so.
+--
+-- When working with such a type, or when working polymorphically with
+-- 'Semigroup' instances, @mtimesDefault@ should be used when the
+-- multiplier might be zero. It is implemented using 'stimes' when
+-- the multiplier is nonzero and 'mempty' when it is zero.
+--
+-- ==== __Examples__
+--
+-- >>> mtimesDefault 0 "bark"
+-- []
+--
+-- >>> mtimesDefault 3 "meow"
+-- "meowmeowmeow"
 mtimesDefault :: (Integral b, Monoid a) => b -> a -> a
 mtimesDefault n x
   | n == 0    = mempty
-  | otherwise = unwrapMonoid (stimes n (WrapMonoid x))
-
--- | 'Option' is effectively 'Maybe' with a better instance of
--- 'Monoid', built off of an underlying 'Semigroup' instead of an
--- underlying 'Monoid'.
---
--- Ideally, this type would not exist at all and we would just fix the
--- 'Monoid' instance of 'Maybe'.
---
--- In GHC 8.4 and higher, the 'Monoid' instance for 'Maybe' has been
--- corrected to lift a 'Semigroup' instance instead of a 'Monoid'
--- instance. Consequently, this type is no longer useful. It will be
--- marked deprecated in GHC 8.8 and removed in GHC 8.10.
-newtype Option a = Option { getOption :: Maybe a }
-  deriving ( Eq       -- ^ @since 4.9.0.0
-           , Ord      -- ^ @since 4.9.0.0
-           , Show     -- ^ @since 4.9.0.0
-           , Read     -- ^ @since 4.9.0.0
-           , Data     -- ^ @since 4.9.0.0
-           , Generic  -- ^ @since 4.9.0.0
-           , Generic1 -- ^ @since 4.9.0.0
-           )
-
--- | @since 4.9.0.0
-instance Functor Option where
-  fmap f (Option a) = Option (fmap f a)
-
--- | @since 4.9.0.0
-instance Applicative Option where
-  pure a = Option (Just a)
-  Option a <*> Option b = Option (a <*> b)
-  liftA2 f (Option x) (Option y) = Option (liftA2 f x y)
-
-  Option Nothing  *>  _ = Option Nothing
-  _               *>  b = b
-
--- | @since 4.9.0.0
-instance Monad Option where
-  Option (Just a) >>= k = k a
-  _               >>= _ = Option Nothing
-  (>>) = (*>)
-
--- | @since 4.9.0.0
-instance Alternative Option where
-  empty = Option Nothing
-  Option Nothing <|> b = b
-  a <|> _ = a
-
--- | @since 4.9.0.0
-instance MonadPlus Option
-
--- | @since 4.9.0.0
-instance MonadFix Option where
-  mfix f = Option (mfix (getOption . f))
-
--- | @since 4.9.0.0
-instance Foldable Option where
-  foldMap f (Option (Just m)) = f m
-  foldMap _ (Option Nothing)  = mempty
-
--- | @since 4.9.0.0
-instance Traversable Option where
-  traverse f (Option (Just a)) = Option . Just <$> f a
-  traverse _ (Option Nothing)  = pure (Option Nothing)
-
--- | Fold an 'Option' case-wise, just like 'maybe'.
-option :: b -> (a -> b) -> Option a -> b
-option n j (Option m) = maybe n j m
-
--- | @since 4.9.0.0
-instance Semigroup a => Semigroup (Option a) where
-  (<>) = coerce ((<>) :: Maybe a -> Maybe a -> Maybe a)
-#if !defined(__HADDOCK_VERSION__)
-    -- workaround https://github.com/haskell/haddock/issues/680
-  stimes _ (Option Nothing) = Option Nothing
-  stimes n (Option (Just a)) = case compare n 0 of
-    LT -> errorWithoutStackTrace "stimes: Option, negative multiplier"
-    EQ -> Option Nothing
-    GT -> Option (Just (stimes n a))
-#endif
-
--- | @since 4.9.0.0
-instance Semigroup a => Monoid (Option a) where
-  mempty = Option Nothing
+  | otherwise = stimes n x

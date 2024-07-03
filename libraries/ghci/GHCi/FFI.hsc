@@ -6,7 +6,32 @@
 --
 -----------------------------------------------------------------------------
 
+{- Note [FFI for the JS-Backend]
+   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+   The JS-backend does not use GHC's native rts, as such you might think that it
+   doesn't require ghci. However, that is not true, because we need ghci in
+   order to interoperate with iserv even if we do not use any of the FFI stuff
+   in this file. So obviously we do not require libffi, but we still need to be
+   able to build ghci in order for the JS-Backend to supply its own iserv
+   interop solution. Thus we bite the bullet and wrap all the unneeded bits in a
+   CPP conditional compilation blocks that detect the JS-backend. A necessary
+   evil to be sure; notice that the only symbols remaining the JS_HOST_ARCH case
+   are those that are explicitly exported by this module and set to error if
+   they are every used.
+-}
+
+#if !defined(javascript_HOST_ARCH)
+-- See Note [FFI_GO_CLOSURES workaround] in ghc_ffi.h
+-- We can't include ghc_ffi.h here as we must build with stage0
+#if defined(darwin_HOST_OS)
+#if !defined(FFI_GO_CLOSURES)
+#define FFI_GO_CLOSURES 0
+#endif
+#endif
+
 #include <ffi.h>
+#endif
 
 {-# LANGUAGE CPP, DeriveGeneric, DeriveAnyClass #-}
 module GHCi.FFI
@@ -18,11 +43,13 @@ module GHCi.FFI
   ) where
 
 import Prelude -- See note [Why do we import Prelude here?]
+#if !defined(javascript_HOST_ARCH)
 import Control.Exception
+import Foreign.C
+#endif
 import Data.Binary
 import GHC.Generics
 import Foreign
-import Foreign.C
 
 data FFIType
   = FFIVoid
@@ -51,6 +78,7 @@ prepForeignCall
     -> FFIType            -- result type
     -> IO (Ptr C_ffi_cif) -- token for making calls (must be freed by caller)
 
+#if !defined(javascript_HOST_ARCH)
 prepForeignCall cconv arg_types result_type = do
   let n_args = length arg_types
   arg_arr <- mallocArray n_args
@@ -58,14 +86,43 @@ prepForeignCall cconv arg_types result_type = do
   cif <- mallocBytes (#const sizeof(ffi_cif))
   let abi = convToABI cconv
   r <- ffi_prep_cif cif abi (fromIntegral n_args) (ffiType result_type) arg_arr
-  if (r /= fFI_OK)
-     then throwIO (ErrorCall ("prepForeignCallFailed: " ++ show r))
-     else return (castPtr cif)
+  if r /= fFI_OK then
+    throwIO $ ErrorCall $ concat
+      [ "prepForeignCallFailed: ", strError r,
+        "(cconv: ", show cconv,
+        " arg tys: ", show arg_types,
+        " res ty: ", show result_type, ")" ]
+  else
+    return (castPtr cif)
+#else
+prepForeignCall _ _ _ =
+  error "GHCi.FFI.prepForeignCall: Called with JS_HOST_ARCH! Perhaps you need to run configure?"
+#endif
+
 
 freeForeignCallInfo :: Ptr C_ffi_cif -> IO ()
+#if !defined(javascript_HOST_ARCH)
 freeForeignCallInfo p = do
   free ((#ptr ffi_cif, arg_types) p)
   free p
+#else
+freeForeignCallInfo _ =
+  error "GHCi.FFI.freeForeignCallInfo: Called with JS_HOST_ARCH! Perhaps you need to run configure?"
+#endif
+
+data C_ffi_cif
+
+#if !defined(javascript_HOST_ARCH)
+data C_ffi_type
+
+strError :: C_ffi_status -> String
+strError r
+  | r == fFI_BAD_ABI
+  = "invalid ABI (FFI_BAD_ABI)"
+  | r == fFI_BAD_TYPEDEF
+  = "invalid type description (FFI_BAD_TYPEDEF)"
+  | otherwise
+  = "unknown error: " ++ show r
 
 convToABI :: FFIConv -> C_ffi_abi
 convToABI FFICCall  = fFI_DEFAULT_ABI
@@ -89,9 +146,6 @@ ffiType FFIUInt16   = ffi_type_uint16
 ffiType FFIUInt32   = ffi_type_uint32
 ffiType FFIUInt64   = ffi_type_uint64
 
-data C_ffi_type
-data C_ffi_cif
-
 type C_ffi_status = (#type ffi_status)
 type C_ffi_abi    = (#type ffi_abi)
 
@@ -108,12 +162,10 @@ foreign import ccall "&ffi_type_float"  ffi_type_float   :: Ptr C_ffi_type
 foreign import ccall "&ffi_type_double" ffi_type_double  :: Ptr C_ffi_type
 foreign import ccall "&ffi_type_pointer"ffi_type_pointer :: Ptr C_ffi_type
 
-fFI_OK            :: C_ffi_status
-fFI_OK            = (#const FFI_OK)
---fFI_BAD_ABI     :: C_ffi_status
---fFI_BAD_ABI     = (#const FFI_BAD_ABI)
---fFI_BAD_TYPEDEF :: C_ffi_status
---fFI_BAD_TYPEDEF = (#const FFI_BAD_TYPEDEF)
+fFI_OK, fFI_BAD_ABI, fFI_BAD_TYPEDEF :: C_ffi_status
+fFI_OK = (#const FFI_OK)
+fFI_BAD_ABI = (#const FFI_BAD_ABI)
+fFI_BAD_TYPEDEF = (#const FFI_BAD_TYPEDEF)
 
 fFI_DEFAULT_ABI :: C_ffi_abi
 fFI_DEFAULT_ABI = (#const FFI_DEFAULT_ABI)
@@ -149,3 +201,4 @@ foreign import ccall "ffi_prep_cif"
 --            -> Ptr ()                    -- put result here
 --            -> Ptr (Ptr ())              -- arg values
 --            -> IO ()
+#endif

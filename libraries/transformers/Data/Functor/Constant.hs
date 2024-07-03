@@ -1,11 +1,15 @@
 {-# LANGUAGE CPP #-}
+#if __GLASGOW_HASKELL__ >= 800
+{-# LANGUAGE DeriveDataTypeable #-}
+#endif
 #if __GLASGOW_HASKELL__ >= 702
 {-# LANGUAGE Safe #-}
+{-# LANGUAGE DeriveGeneric #-}
 #endif
 #if __GLASGOW_HASKELL__ >= 706
 {-# LANGUAGE PolyKinds #-}
 #endif
-#if __GLASGOW_HASKELL__ >= 710
+#if __GLASGOW_HASKELL__ >= 710 && __GLASGOW_HASKELL__ < 802
 {-# LANGUAGE AutoDeriveTypeable #-}
 #endif
 -----------------------------------------------------------------------------
@@ -32,23 +36,40 @@ import Data.Functor.Contravariant
 
 import Control.Applicative
 import Data.Foldable
+#if !(MIN_VERSION_base(4,8,0))
 import Data.Monoid (Monoid(..))
 import Data.Traversable (Traversable(traverse))
+#endif
 #if MIN_VERSION_base(4,8,0)
 import Data.Bifunctor (Bifunctor(..))
 #endif
-#if MIN_VERSION_base(4,9,0)
-import Data.Semigroup (Semigroup(..))
+#if (MIN_VERSION_base(4,9,0)) && !(MIN_VERSION_base(4,11,0))
+import Data.Semigroup (Semigroup((<>)))
 #endif
 #if MIN_VERSION_base(4,10,0)
 import Data.Bifoldable (Bifoldable(..))
 import Data.Bitraversable (Bitraversable(..))
 #endif
 import Prelude hiding (null, length)
+#if __GLASGOW_HASKELL__ >= 800
+import Data.Data
+#endif
+#if __GLASGOW_HASKELL__ >= 704
+import GHC.Generics
+#endif
 
 -- | Constant functor.
 newtype Constant a b = Constant { getConstant :: a }
-    deriving (Eq, Ord)
+    deriving (Eq, Ord
+#if __GLASGOW_HASKELL__ >= 800
+        , Data
+#endif
+#if __GLASGOW_HASKELL__ >= 710
+        , Generic, Generic1
+#elif __GLASGOW_HASKELL__ >= 704
+        , Generic
+#endif
+        )
 
 -- These instances would be equivalent to the derived instances of the
 -- newtype if the field were removed.

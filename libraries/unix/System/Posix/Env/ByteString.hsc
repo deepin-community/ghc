@@ -1,8 +1,5 @@
 {-# LANGUAGE CApiFFI #-}
 {-# LANGUAGE Trustworthy #-}
-#if __GLASGOW_HASKELL__ >= 709
-{-# OPTIONS_GHC -fno-warn-trustworthy-safe #-}
-#endif
 
 -----------------------------------------------------------------------------
 -- |
@@ -24,9 +21,11 @@ module System.Posix.Env.ByteString (
         , getEnvDefault
         , getEnvironmentPrim
         , getEnvironment
+        , setEnvironment
         , putEnv
         , setEnv
-       , unsetEnv
+        , unsetEnv
+        , clearEnv
 
        -- * Program arguments
        , getArgs
@@ -34,14 +33,18 @@ module System.Posix.Env.ByteString (
 
 #include "HsUnix.h"
 
+import Control.Monad
 import Foreign
 import Foreign.C
-import Control.Monad    ( liftM )
 import Data.Maybe       ( fromMaybe )
 
+import System.Posix.Env ( clearEnv )
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as BC
 import Data.ByteString (ByteString)
+import Data.ByteString.Internal (ByteString (PS))
+
+import qualified System.Posix.Env.Internal as Internal
 
 -- |'getEnv' looks up a variable in the environment.
 
@@ -51,42 +54,24 @@ getEnv ::
 getEnv name = do
   litstring <- B.useAsCString name c_getenv
   if litstring /= nullPtr
-     then liftM Just $ B.packCString litstring
+     then Just <$> B.packCString litstring
      else return Nothing
 
 -- |'getEnvDefault' is a wrapper around 'getEnv' where the
--- programmer can specify a fallback if the variable is not found
--- in the environment.
+-- programmer can specify a fallback as the second argument, which will be
+-- used if the variable is not found in the environment.
 
 getEnvDefault ::
   ByteString    {- ^ variable name                    -} ->
   ByteString    {- ^ fallback value                   -} ->
   IO ByteString {- ^ variable value or fallback value -}
-getEnvDefault name fallback = liftM (fromMaybe fallback) (getEnv name)
+getEnvDefault name fallback = fromMaybe fallback <$> getEnv name
 
 foreign import ccall unsafe "getenv"
    c_getenv :: CString -> IO CString
 
 getEnvironmentPrim :: IO [ByteString]
-getEnvironmentPrim = do
-  c_environ <- getCEnviron
-  arr <- peekArray0 nullPtr c_environ
-  mapM B.packCString arr
-
-getCEnviron :: IO (Ptr CString)
-#if HAVE__NSGETENVIRON
--- You should not access @char **environ@ directly on Darwin in a bundle/shared library.
--- See #2458 and http://developer.apple.com/library/mac/#documentation/Darwin/Reference/ManPages/man7/environ.7.html
-getCEnviron = nsGetEnviron >>= peek
-
-foreign import ccall unsafe "_NSGetEnviron"
-   nsGetEnviron :: IO (Ptr (Ptr CString))
-#else
-getCEnviron = peek c_environ_p
-
-foreign import ccall unsafe "&environ"
-   c_environ_p :: Ptr (Ptr CString)
-#endif
+getEnvironmentPrim = Internal.getEnvironmentPrim >>= mapM B.packCString
 
 -- |'getEnvironment' retrieves the entire environment as a
 -- list of @(key,value)@ pairs.
@@ -99,6 +84,18 @@ getEnvironment = do
    dropEq (x,y)
       | BC.head y == '=' = (x,B.tail y)
       | otherwise       = error $ "getEnvironment: insane variable " ++ BC.unpack x
+
+-- |'setEnvironment' resets the entire environment to the given list of
+-- @(key,value)@ pairs.
+--
+-- @since 2.8.0.0
+setEnvironment ::
+  [(ByteString,ByteString)] {- ^ @[(key,value)]@ -} ->
+  IO ()
+setEnvironment env = do
+  clearEnv
+  forM_ env $ \(key,value) ->
+    setEnv key value True {-overwrite-}
 
 -- |The 'unsetEnv' function deletes all instances of the variable name
 -- from the environment.
@@ -120,15 +117,25 @@ foreign import capi unsafe "HsUnix.h unsetenv"
    c_unsetenv :: CString -> IO ()
 # endif
 #else
-unsetEnv name = putEnv (name ++ "=")
+unsetEnv name = putEnv (BC.snoc name '=')
 #endif
 
 -- |'putEnv' function takes an argument of the form @name=value@
 -- and is equivalent to @setEnv(key,value,True{-overwrite-})@.
 
 putEnv :: ByteString {- ^ "key=value" -} -> IO ()
-putEnv keyvalue = B.useAsCString keyvalue $ \s ->
-  throwErrnoIfMinus1_ "putenv" (c_putenv s)
+putEnv (PS fp o l) = withForeignPtr fp $ \p -> do
+  -- https://pubs.opengroup.org/onlinepubs/009696899/functions/putenv.html
+  --
+  -- "the string pointed to by string shall become part of the environment,
+  -- so altering the string shall change the environment. The space used by
+  -- string is no longer used once a new string which defines name is passed to putenv()."
+  --
+  -- hence we must not free the buffer
+  buf <- mallocBytes (l+1)
+  copyBytes buf (p `plusPtr` o) l
+  pokeByteOff buf l (0::Word8)
+  throwErrnoIfMinus1_ "putenv" (c_putenv (castPtr buf))
 
 foreign import ccall unsafe "putenv"
    c_putenv :: CString -> IO CInt
@@ -176,7 +183,7 @@ getArgs =
   alloca $ \ p_argc ->
   alloca $ \ p_argv -> do
    getProgArgv p_argc p_argv
-   p    <- fromIntegral `liftM` peek p_argc
+   p    <- fromIntegral <$> peek p_argc
    argv <- peek p_argv
    peekArray (p - 1) (advancePtr argv 1) >>= mapM B.packCString
 

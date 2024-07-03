@@ -11,9 +11,7 @@
 
 #include <windows.h>
 
-#if defined(HAVE_TIME_H)
-# include <time.h>
-#endif
+#include <time.h>
 
 /* Convert FILETIMEs into secs */
 
@@ -32,6 +30,20 @@ getProcessTimes(Time *user, Time *elapsed)
 {
     *user    = getProcessCPUTime();
     *elapsed = getProcessElapsedTime();
+}
+
+Time
+getCurrentThreadCPUTime(void)
+{
+    FILETIME creationTime, exitTime, userTime, kernelTime = {0,0};
+
+    if (!GetThreadTimes(GetCurrentThread(), &creationTime,
+                        &exitTime, &kernelTime, &userTime)) {
+        sysErrorBelch("getCurrentThreadCPUTime: Win32 error %lu", GetLastError());
+        return 0;
+    }
+
+    return fileTimeToRtsTime(userTime);
 }
 
 Time
@@ -54,7 +66,7 @@ static LARGE_INTEGER qpc_frequency = {.QuadPart = 0};
 // Initialize qpc_frequency. This function should be called before any call to
 // getMonotonicNSec.  If QPC is not supported on this system, qpc_frequency is
 // set to 0.
-void initializeTimer()
+void initializeTimer(void)
 {
     BOOL qpc_supported = QueryPerformanceFrequency(&qpc_frequency);
     if (!qpc_supported)
@@ -64,7 +76,7 @@ void initializeTimer()
 }
 
 HsWord64
-getMonotonicNSec()
+getMonotonicNSec(void)
 {
     if (qpc_frequency.QuadPart)
     {
@@ -87,7 +99,7 @@ getMonotonicNSec()
         // TODO: Remove this code path, it cannot be taken because
         // `QueryPerformanceFrequency` cannot fail on Windows >= XP
         // and GHC no longer supports Windows <= XP.
-        // See https://ghc.haskell.org/trac/ghc/ticket/14233
+        // See https://gitlab.haskell.org/ghc/ghc/issues/14233
 
         // NOTE: GetTickCount is a 32-bit millisecond value, so it wraps around
         // every 49 days.

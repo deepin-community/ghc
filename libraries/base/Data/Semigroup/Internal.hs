@@ -4,7 +4,7 @@
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
--- | Auxilary definitions for 'Semigroup'
+-- | Auxiliary definitions for 'Semigroup'
 --
 -- This module provides some @newtype@ wrappers and helpers which are
 -- reexported from the "Data.Semigroup" module or imported directly
@@ -22,6 +22,7 @@ module Data.Semigroup.Internal where
 
 import GHC.Base hiding (Any)
 import GHC.Enum
+import qualified GHC.List as List
 import GHC.Num
 import GHC.Read
 import GHC.Show
@@ -31,7 +32,7 @@ import GHC.Real
 -- | This is a valid definition of 'stimes' for an idempotent 'Semigroup'.
 --
 -- When @x <> x = x@, this definition should be preferred, because it
--- works in /O(1)/ rather than /O(log n)/.
+-- works in \(\mathcal{O}(1)\) rather than \(\mathcal{O}(\log n)\).
 stimesIdempotent :: Integral b => b -> a -> a
 stimesIdempotent n x
   | n <= 0 = errorWithoutStackTrace "stimesIdempotent: positive multiplier expected"
@@ -39,8 +40,8 @@ stimesIdempotent n x
 
 -- | This is a valid definition of 'stimes' for an idempotent 'Monoid'.
 --
--- When @mappend x x = x@, this definition should be preferred, because it
--- works in /O(1)/ rather than /O(log n)/
+-- When @x <> x = x@, this definition should be preferred, because it
+-- works in \(\mathcal{O}(1)\) rather than \(\mathcal{O}(\log n)\)
 stimesIdempotentMonoid :: (Integral b, Monoid a) => b -> a -> a
 stimesIdempotentMonoid n x = case compare n 0 of
   LT -> errorWithoutStackTrace "stimesIdempotentMonoid: negative multiplier"
@@ -66,7 +67,7 @@ stimesMonoid n x0 = case compare n 0 of
         | y == 1 = x `mappend` z
         | otherwise = g (x `mappend` x) (y `quot` 2) (x `mappend` z) -- See Note [Half of y - 1]
 
--- this is used by the class definitionin GHC.Base;
+-- this is used by the class definition in GHC.Base;
 -- it lives here to avoid cycles
 stimesDefault :: (Integral b, Semigroup a) => b -> a -> a
 stimesDefault y0 x0
@@ -104,9 +105,17 @@ stimesList n x
     rep i = x ++ rep (i - 1)
 
 -- | The dual of a 'Monoid', obtained by swapping the arguments of 'mappend'.
+-- | The dual of a 'Monoid', obtained by swapping the arguments of '(<>)'.
 --
--- >>> getDual (mappend (Dual "Hello") (Dual "World"))
--- "WorldHello"
+-- > Dual a <> Dual b == Dual (b <> a)
+--
+-- ==== __Examples__
+--
+-- >>> Dual "Hello" <> Dual "World"
+-- Dual {getDual = "WorldHello"}
+--
+-- >>> Dual (Dual "Hello") <> Dual (Dual "World")
+-- Dual {getDual = Dual {getDual = "HelloWorld"}}
 newtype Dual a = Dual { getDual :: a }
         deriving ( Eq       -- ^ @since 2.01
                  , Ord      -- ^ @since 2.01
@@ -141,9 +150,17 @@ instance Monad Dual where
 
 -- | The monoid of endomorphisms under composition.
 --
+-- > Endo f <> Endo g == Endo (f . g)
+--
+-- ==== __Examples__
+--
 -- >>> let computation = Endo ("Hello, " ++) <> Endo (++ "!")
 -- >>> appEndo computation "Haskell"
 -- "Hello, Haskell!"
+--
+-- >>> let computation = Endo (*3) <> Endo (+1)
+-- >>> appEndo computation 1
+-- 6
 newtype Endo a = Endo { appEndo :: a -> a }
                deriving ( Generic -- ^ @since 4.7.0.0
                         )
@@ -157,13 +174,20 @@ instance Semigroup (Endo a) where
 instance Monoid (Endo a) where
         mempty = Endo id
 
--- | Boolean monoid under conjunction ('&&').
+-- | Boolean monoid under conjunction '(&&)'.
 --
--- >>> getAll (All True <> mempty <> All False)
--- False
+-- > All x <> All y = All (x && y)
 --
--- >>> getAll (mconcat (map (\x -> All (even x)) [2,4,6,7,8]))
--- False
+-- ==== __Examples__
+--
+-- >>> All True <> mempty <> All False)
+-- All {getAll = False}
+--
+-- >>> mconcat (map (\x -> All (even x)) [2,4,6,7,8])
+-- All {getAll = False}
+--
+-- >>> All True <> mempty
+-- All {getAll = True}
 newtype All = All { getAll :: Bool }
         deriving ( Eq      -- ^ @since 2.01
                  , Ord     -- ^ @since 2.01
@@ -182,13 +206,20 @@ instance Semigroup All where
 instance Monoid All where
         mempty = All True
 
--- | Boolean monoid under disjunction ('||').
+-- | Boolean monoid under disjunction '(||)'.
 --
--- >>> getAny (Any True <> mempty <> Any False)
--- True
+-- > Any x <> Any y = Any (x || y)
 --
--- >>> getAny (mconcat (map (\x -> Any (even x)) [2,4,6,7,8]))
--- True
+-- ==== __Examples__
+--
+-- >>> Any True <> mempty <> Any False
+-- Any {getAny = True}
+--
+-- >>> mconcat (map (\x -> Any (even x)) [2,4,6,7,8])
+-- Any {getAny = True}
+--
+-- >>> Any False <> mempty
+-- Any {getAny = False}
 newtype Any = Any { getAny :: Bool }
         deriving ( Eq      -- ^ @since 2.01
                  , Ord     -- ^ @since 2.01
@@ -209,8 +240,15 @@ instance Monoid Any where
 
 -- | Monoid under addition.
 --
--- >>> getSum (Sum 1 <> Sum 2 <> mempty)
--- 3
+-- > Sum a <> Sum b = Sum (a + b)
+--
+-- ==== __Examples__
+--
+-- >>> Sum 1 <> Sum 2 <> mempty
+-- Sum {getSum = 3}
+--
+-- >>> mconcat [ Sum n | n <- [3 .. 9]]
+-- Sum {getSum = 42}
 newtype Sum a = Sum { getSum :: a }
         deriving ( Eq       -- ^ @since 2.01
                  , Ord      -- ^ @since 2.01
@@ -230,6 +268,10 @@ instance Num a => Semigroup (Sum a) where
 -- | @since 2.01
 instance Num a => Monoid (Sum a) where
         mempty = Sum 0
+        -- By default, we would get a lazy right fold. This forces the use of a strict
+        -- left fold instead.
+        mconcat = List.foldl' (<>) mempty
+        {-# INLINE mconcat #-}
 
 -- | @since 4.8.0.0
 instance Functor Sum where
@@ -246,8 +288,15 @@ instance Monad Sum where
 
 -- | Monoid under multiplication.
 --
--- >>> getProduct (Product 3 <> Product 4 <> mempty)
--- 12
+-- > Product x <> Product y == Product (x * y)
+--
+-- ==== __Examples__
+--
+-- >>> Product 3 <> Product 4 <> mempty
+-- Product {getProduct = 12}
+--
+-- >>> mconcat [ Product n | n <- [2 .. 10]]
+-- Product {getProduct = 3628800}
 newtype Product a = Product { getProduct :: a }
         deriving ( Eq       -- ^ @since 2.01
                  , Ord      -- ^ @since 2.01
@@ -268,6 +317,10 @@ instance Num a => Semigroup (Product a) where
 -- | @since 2.01
 instance Num a => Monoid (Product a) where
         mempty = Product 1
+        -- By default, we would get a lazy right fold. This forces the use of a strict
+        -- left fold instead.
+        mconcat = List.foldl' (<>) mempty
+        {-# INLINE mconcat #-}
 
 -- | @since 4.8.0.0
 instance Functor Product where
@@ -284,6 +337,15 @@ instance Monad Product where
 
 
 -- | Monoid under '<|>'.
+--
+-- > Alt l <> Alt r == Alt (l <|> r)
+--
+-- ==== __Examples__
+-- >>> Alt (Just 12) <> Alt (Just 24)
+-- Alt {getAlt = Just 12}
+--
+-- >>> Alt Nothing <> Alt (Just 24)
+-- Alt {getAlt = Just 24}
 --
 -- @since 4.8.0.0
 newtype Alt f a = Alt {getAlt :: f a}

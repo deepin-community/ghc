@@ -1,9 +1,10 @@
 {-# LANGUAGE CApiFFI #-}
-#if __GLASGOW_HASKELL__ >= 709
-{-# LANGUAGE Safe #-}
-#else
+#if __GLASGOW_HASKELL__ >= 905
 {-# LANGUAGE Trustworthy #-}
+#else
+{-# LANGUAGE Safe #-}
 #endif
+
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  System.Posix.Resource
@@ -31,6 +32,14 @@ import System.Posix.Types
 import Foreign
 import Foreign.C
 
+#if !defined(HAVE_STRUCT_RLIMIT)
+import System.IO.Error ( ioeSetLocation )
+import GHC.IO.Exception ( unsupportedOperation )
+#endif
+#if __GLASGOW_HASKELL__ >= 905
+import GHC.Exts ( considerAccessible )
+#endif
+
 -- -----------------------------------------------------------------------------
 -- Resource limits
 
@@ -44,17 +53,31 @@ data Resource
 #ifdef RLIMIT_AS
   | ResourceTotalMemory
 #endif
-  deriving Eq
+  deriving (Eq, Show)
 
 data ResourceLimits
   = ResourceLimits { softLimit, hardLimit :: ResourceLimit }
-  deriving Eq
+  deriving (Eq, Show)
 
 data ResourceLimit
   = ResourceLimitInfinity
   | ResourceLimitUnknown
   | ResourceLimit Integer
-  deriving Eq
+  deriving (Eq, Show)
+
+#if !defined(HAVE_STRUCT_RLIMIT)
+
+getResourceLimit :: Resource -> IO ResourceLimits
+{-# WARNING getResourceLimit
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_STRUCT_RLIMIT@)" #-}
+getResourceLimit _ = ioError (ioeSetLocation unsupportedOperation "getResourceLimit")
+
+setResourceLimit :: Resource -> ResourceLimits -> IO ()
+{-# WARNING setResourceLimit
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_STRUCT_RLIMIT@)" #-}
+setResourceLimit _ _ = ioError (ioeSetLocation unsupportedOperation "setResourceLimit")
+
+#else
 
 data {-# CTYPE "struct rlimit" #-} RLimit
 
@@ -100,22 +123,36 @@ unpackRLimit :: CRLim -> ResourceLimit
 unpackRLimit (#const RLIM_INFINITY)  = ResourceLimitInfinity
 unpackRLimit other
 #if defined(RLIM_SAVED_MAX)
-    | ((#const RLIM_SAVED_MAX) :: CRLim) /= (#const RLIM_INFINITY) &&
-      other == (#const RLIM_SAVED_MAX) = ResourceLimitUnknown
+    | ((#const RLIM_SAVED_MAX) :: CRLim) /= (#const RLIM_INFINITY)
+    , other == (#const RLIM_SAVED_MAX)
+    = ResourceLimitUnknown
 #endif
 #if defined(RLIM_SAVED_CUR)
-    | ((#const RLIM_SAVED_CUR) :: CRLim) /= (#const RLIM_INFINITY) &&
-      other == (#const RLIM_SAVED_CUR) = ResourceLimitUnknown
+    | ((#const RLIM_SAVED_CUR) :: CRLim) /= (#const RLIM_INFINITY)
+    , other == (#const RLIM_SAVED_CUR)
+#if __GLASGOW_HASKELL__ >= 905
+    , considerAccessible
+#endif
+    = ResourceLimitUnknown
+    -- (*) This pattern match is redundant if RLIM_SAVED_MAX and RLIM_SAVED_CUR
+    -- are both defined and are equal. This redundancy is only detected by GHC
+    -- starting from version 9.5, so we use 'considerAccessible'.
 #endif
     | otherwise = ResourceLimit (fromIntegral other)
 
 packRLimit :: ResourceLimit -> Bool -> CRLim
 packRLimit ResourceLimitInfinity _     = (#const RLIM_INFINITY)
-#ifdef RLIM_SAVED_CUR
+#if defined(RLIM_SAVED_CUR)
 packRLimit ResourceLimitUnknown  True  = (#const RLIM_SAVED_CUR)
 #endif
-#ifdef RLIM_SAVED_MAX
+#if defined(RLIM_SAVED_MAX)
 packRLimit ResourceLimitUnknown  False = (#const RLIM_SAVED_MAX)
+#endif
+#if ! defined(RLIM_SAVED_MAX) && !defined(RLIM_SAVED_CUR)
+packRLimit ResourceLimitUnknown  _     =
+    error
+      $ "System.Posix.Resource.packRLimit: " ++
+        "ResourceLimitUnknown but RLIM_SAVED_MAX/RLIM_SAVED_CUR not defined by platform"
 #endif
 packRLimit (ResourceLimit other) _     = fromIntegral other
 
@@ -158,3 +195,5 @@ showRLim ResourceLimitInfinity = "infinity"
 showRLim ResourceLimitUnknown  = "unknown"
 showRLim (ResourceLimit other)  = show other
 -}
+
+#endif // HAVE_STRUCT_RLIMIT

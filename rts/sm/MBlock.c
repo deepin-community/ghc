@@ -8,7 +8,7 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#include "PosixSource.h"
+#include "rts/PosixSource.h"
 #include "Rts.h"
 
 #include "RtsUtils.h"
@@ -46,8 +46,8 @@ W_ mpc_misses = 0;
       that was committed, after the given one
 
   For both these calls, @state is an in-out parameter that points to
-  an opaque state threading the calls togheter. The calls should only
-  be used in an interation fashion. Pass NULL if @state is not
+  an opaque state threading the calls together. The calls should only
+  be used in an iteration fashion. Pass NULL if @state is not
   interesting,or pass a pointer to NULL if you don't have a state.
 
   void *getCommittedMBlocks(uint32_t n)
@@ -617,6 +617,8 @@ freeMBlocks(void *addr, uint32_t n)
 void
 freeAllMBlocks(void)
 {
+// See Note [Megablock allocator on wasm].
+#if !defined(wasm32_HOST_ARCH)
     debugTrace(DEBUG_gc, "freeing all megablocks");
 
 #if defined(USE_LARGE_ADDRESS_SPACE)
@@ -646,6 +648,7 @@ freeAllMBlocks(void)
     stgFree(mblock_maps);
 #endif
 
+#endif
 #endif
 }
 

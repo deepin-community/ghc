@@ -4,14 +4,11 @@
 module Util where
 import Prelude ()
 import System.Directory.Internal.Prelude
-import System.Directory
+import System.Directory.Internal
+import System.Directory.OsPath
 import Data.Time.Clock (NominalDiffTime, UTCTime, diffUTCTime)
-#if MIN_VERSION_base(4, 7, 0)
 import System.Environment (getEnvironment, setEnv, unsetEnv)
-#elif !defined(mingw32_HOST_OS)
-import qualified System.Posix as Posix
-#endif
-import System.FilePath ((</>), normalise)
+import System.OsPath ((</>), decodeFS, encodeFS, normalise)
 import qualified Data.List as List
 
 modifyIORef' :: IORef a -> (a -> a) -> IO ()
@@ -127,7 +124,7 @@ expectIOErrorType t file line context which action = do
     Right _             -> Left  ["did not throw an exception"]
 
 -- | Traverse the directory tree in preorder.
-preprocessPathRecursive :: (FilePath -> IO ()) -> FilePath -> IO ()
+preprocessPathRecursive :: (OsPath -> IO ()) -> OsPath -> IO ()
 preprocessPathRecursive f path = do
   dirExists <- doesDirectoryExist path
   if dirExists
@@ -136,11 +133,11 @@ preprocessPathRecursive f path = do
       f path
       when (not isLink) $ do
         names <- listDirectory path
-        traverse_ (preprocessPathRecursive f) ((path </>) <$> names)
+        for_ ((path </>) <$> names) (preprocessPathRecursive f)
     else do
       f path
 
-withNewDirectory :: Bool -> FilePath -> IO a -> IO a
+withNewDirectory :: Bool -> OsPath -> IO a -> IO a
 withNewDirectory keep dir action = do
   dir' <- makeAbsolute dir
   bracket_ (createDirectoryIfMissing True dir') (cleanup dir') action
@@ -167,20 +164,11 @@ isolateEnvironment = bracket getEnvs setEnvs . const
     updateEnvs [] [] = pure ()
     updateEnvs kvs1 [] = for_ kvs1 (unsetEnv . fst)
     updateEnvs [] kvs2 = for_ kvs2 (uncurry setEnv)
-#if MIN_VERSION_base(4, 7, 0)
-#elif !defined(mingw32_HOST_OS)
-    getEnvironment = Posix.getEnvironment
-    setEnv k v = Posix.setEnv k v True
-    unsetEnv = Posix.unsetEnv
-#else
-    getEnvironment = pure []
-    setEnv _ _ = pure ()
-    unsetEnv _ = pure ()
-#endif
 
-isolateWorkingDirectory :: Bool -> FilePath -> IO a -> IO a
+isolateWorkingDirectory :: Bool -> OsPath -> IO a -> IO a
 isolateWorkingDirectory keep dir action = do
-  when (normalise dir `List.elem` [".", "./"]) $
+  normalisedDir <- decodeFS (normalise dir)
+  when (normalisedDir `List.elem` [".", "./"]) $
     throwIO (userError ("isolateWorkingDirectory cannot be used " <>
                         "with current directory"))
   dir' <- makeAbsolute dir
@@ -197,11 +185,11 @@ run t name action = do
     Right () -> return ()
 
 isolatedRun :: TestEnv -> String -> (TestEnv -> IO ()) -> IO ()
-isolatedRun t@TestEnv{testKeepDirs = keep} name = run t name . (isolate .)
+isolatedRun t@TestEnv{testKeepDirs = keep} name action = do
+  workDir <- encodeFS ("dist/test-" <> name <> ".tmp")
+  run t name (isolate workDir . action)
   where
-    isolate =
-      isolateEnvironment .
-      isolateWorkingDirectory keep ("dist/test-" <> name <> ".tmp")
+    isolate workDir = isolateEnvironment . isolateWorkingDirectory keep workDir
 
 tryRead :: Read a => String -> Maybe a
 tryRead s =

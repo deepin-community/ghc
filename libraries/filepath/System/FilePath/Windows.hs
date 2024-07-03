@@ -1,4 +1,8 @@
 {-# LANGUAGE CPP #-}
-#define MODULE_NAME     Windows
-#define IS_WINDOWS      True
+
+#undef POSIX
+#define WINDOWS
+#define IS_WINDOWS True
+#define MODULE_NAME Windows
+
 #include "Internal.hs"

@@ -6,7 +6,7 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#include "PosixSource.h"
+#include "rts/PosixSource.h"
 #include "Rts.h"
 #include "RtsUtils.h"
 
@@ -36,7 +36,7 @@
 
 // Default to the stdio implementation of these hooks.
 RtsMsgFunction *fatalInternalErrorFn = rtsFatalInternalErrorFn;
-RtsMsgFunction *debugMsgFn           = rtsDebugMsgFn;
+RtsMsgFunctionRetLen *debugMsgFn           = rtsDebugMsgFn;
 RtsMsgFunction *errorMsgFn           = rtsErrorMsgFn;
 RtsMsgFunction *sysErrorMsgFn        = rtsSysErrorMsgFn;
 
@@ -73,6 +73,12 @@ errorBelch(const char*s, ...)
 }
 
 void
+_warnFail(const char*filename, unsigned int linenum)
+{
+    errorBelch("ASSERTION FAILED: file %s, line %u\n", filename, linenum);
+}
+
+void
 verrorBelch(const char*s, va_list ap)
 {
   (*errorMsgFn)(s,ap);
@@ -102,10 +108,10 @@ debugBelch(const char*s, ...)
   va_end(ap);
 }
 
-void
+int
 vdebugBelch(const char*s, va_list ap)
 {
-  (*debugMsgFn)(s,ap);
+  return (*debugMsgFn)(s,ap);
 }
 
 /* -----------------------------------------------------------------------------
@@ -114,7 +120,7 @@ vdebugBelch(const char*s, va_list ap)
 
 #define BUFSIZE 512
 
-#if defined (mingw32_HOST_OS)
+#if defined(mingw32_HOST_OS)
 static int
 isGUIApp(void)
 {
@@ -133,7 +139,7 @@ isGUIApp(void)
 }
 #endif
 
-void GNU_ATTRIBUTE(__noreturn__)
+void STG_NORETURN
 rtsFatalInternalErrorFn(const char *s, va_list ap)
 {
 #if defined(mingw32_HOST_OS)
@@ -248,7 +254,7 @@ rtsSysErrorMsgFn(const char *s, va_list ap)
 
         r = vsnprintf(buf, BUFSIZE, s, ap);
         if (r > 0 && r < BUFSIZE) {
-            r = vsnprintf(buf+r, BUFSIZE-r, ": %s", syserr);
+            r = snprintf(buf+r, BUFSIZE-r, ": %s", syserr);
             MessageBox(NULL /* hWnd */,
                        buf,
                        prog_name,
@@ -285,16 +291,16 @@ rtsSysErrorMsgFn(const char *s, va_list ap)
 #endif
 }
 
-void
+int
 rtsDebugMsgFn(const char *s, va_list ap)
 {
+  int r;
 #if defined(mingw32_HOST_OS)
   /* Ensure we're in text mode so newlines get encoded properly.  */
   int mode = _setmode (_fileno(stderr), _O_TEXT);
   if (isGUIApp())
   {
      char buf[BUFSIZE];
-         int r;
 
          r = vsnprintf(buf, BUFSIZE, s, ap);
          if (r > 0 && r < BUFSIZE) {
@@ -305,20 +311,30 @@ rtsDebugMsgFn(const char *s, va_list ap)
 #endif
   {
      /* don't fflush(stdout); WORKAROUND bug in Linux glibc */
-     vfprintf(stderr, s, ap);
+     r = vfprintf(stderr, s, ap);
      fflush(stderr);
   }
 #if defined(mingw32_HOST_OS)
   _setmode (_fileno(stderr), mode);
 #endif
+  return r;
 }
 
 
-// Used in stg_badAlignment_entry defined in StgStartup.cmm.
-void rtsBadAlignmentBarf(void) GNUC3_ATTRIBUTE(__noreturn__);
-
 void
-rtsBadAlignmentBarf()
+rtsBadAlignmentBarf(void)
 {
     barf("Encountered incorrectly aligned pointer. This can't be good.");
+}
+
+void
+rtsOutOfBoundsAccess(void)
+{
+    barf("Encountered out of bounds array access.");
+}
+
+void
+rtsMemcpyRangeOverlap(void)
+{
+    barf("Encountered overlapping source/destination ranges in a memcpy-using op.");
 }

@@ -7,18 +7,22 @@ module GHCi.Leak
 
 import Control.Monad
 import Data.Bits
-import DynFlags ( sTargetPlatform )
 import Foreign.Ptr (ptrToIntPtr, intPtrToPtr)
 import GHC
 import GHC.Ptr (Ptr (..))
 import GHCi.Util
-import HscTypes
-import Outputable
-import Platform (target32Bit)
+import GHC.Driver.Env
+import GHC.Driver.Ppr
+import GHC.Utils.Outputable
+import GHC.Unit.Module.ModDetails
+import GHC.Unit.Home.ModInfo
+import GHC.Platform (target32Bit)
+import GHC.Linker.Types
 import Prelude
 import System.Mem
 import System.Mem.Weak
-import UniqDFM
+import GHC.Types.Unique.DFM
+import Control.Exception
 
 -- Checking for space leaks in GHCi. See #15111, and the
 -- -fghci-leak-check flag.
@@ -29,20 +33,24 @@ data LeakModIndicators = LeakModIndicators
   { leakMod :: Weak HomeModInfo
   , leakIface :: Weak ModIface
   , leakDetails :: Weak ModDetails
-  , leakLinkable :: Maybe (Weak Linkable)
+  , leakLinkable :: [Maybe (Weak Linkable)]
   }
 
 -- | Grab weak references to some of the data structures representing
 -- the currently loaded modules.
 getLeakIndicators :: HscEnv -> IO LeakIndicators
-getLeakIndicators HscEnv{..} =
+getLeakIndicators hsc_env =
   fmap LeakIndicators $
-    forM (eltsUDFM hsc_HPT) $ \hmi@HomeModInfo{..} -> do
+    forM (eltsUDFM (hsc_HPT hsc_env)) $ \hmi@HomeModInfo{..} -> do
       leakMod <- mkWeakPtr hmi Nothing
       leakIface <- mkWeakPtr hm_iface Nothing
       leakDetails <- mkWeakPtr hm_details Nothing
-      leakLinkable <- mapM (`mkWeakPtr` Nothing) hm_linkable
+      leakLinkable <-  mkWeakLinkables hm_linkable
       return $ LeakModIndicators{..}
+  where
+    mkWeakLinkables :: HomeModLinkable -> IO [Maybe (Weak Linkable)]
+    mkWeakLinkables (HomeModLinkable mbc mo) =
+      mapM (\ln -> traverse (flip mkWeakPtr Nothing <=< evaluate) ln) [mbc, mo]
 
 -- | Look at the LeakIndicators collected by an earlier call to
 -- `getLeakIndicators`, and print messasges if any of them are still
@@ -56,9 +64,11 @@ checkLeakIndicators dflags (LeakIndicators leakmods)  = do
       Just hmi ->
         report ("HomeModInfo for " ++
           showSDoc dflags (ppr (mi_module (hm_iface hmi)))) (Just hmi)
-    deRefWeak leakIface >>= report "ModIface"
+    deRefWeak leakIface >>= \case
+      Nothing -> return ()
+      Just miface -> report ("ModIface:" ++ moduleNameString (moduleName (mi_module miface))) (Just miface)
     deRefWeak leakDetails >>= report "ModDetails"
-    forM_ leakLinkable $ \l -> deRefWeak l >>= report "Linkable"
+    forM_ leakLinkable $ \l -> forM_ l $ \l' -> deRefWeak l' >>= report "Linkable"
  where
   report :: String -> Maybe a -> IO ()
   report _ Nothing = return ()
@@ -68,7 +78,7 @@ checkLeakIndicators dflags (LeakIndicators leakmods)  = do
               show (maskTagBits addr))
 
   tagBits
-    | target32Bit (sTargetPlatform (settings dflags)) = 2
+    | target32Bit (targetPlatform dflags) = 2
     | otherwise = 3
 
   maskTagBits :: Ptr a -> Ptr a

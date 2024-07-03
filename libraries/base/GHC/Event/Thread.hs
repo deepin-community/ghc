@@ -1,7 +1,13 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE Trustworthy #-}
 {-# LANGUAGE BangPatterns, NoImplicitPrelude #-}
 
+#include <ghcplatform.h>
+
 module GHC.Event.Thread
+#if defined(javascript_HOST_ARCH)
+    ( ) where
+#else
     ( getSystemEventManager
     , getSystemTimerManager
     , ensureIOManagerIsRunning
@@ -16,9 +22,12 @@ module GHC.Event.Thread
     , blockedOnBadFD -- used by RTS
     ) where
 
+
+-- TODO: Use new Windows I/O manager
 import Control.Exception (finally, SomeException, toException)
 import Data.Foldable (forM_, mapM_, sequence_)
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef, atomicWriteIORef)
+import Data.Maybe (fromMaybe)
 import Data.Tuple (snd)
 import Foreign.C.Error (eBADF, errnoToIOError)
 import Foreign.C.Types (CInt(..), CUInt(..))
@@ -28,8 +37,9 @@ import GHC.List (zipWith, zipWith3)
 import GHC.Conc.Sync (TVar, ThreadId, ThreadStatus(..), atomically, forkIO,
                       labelThread, modifyMVar_, withMVar, newTVar, sharedCAF,
                       getNumCapabilities, threadCapability, myThreadId, forkOn,
-                      threadStatus, writeTVar, newTVarIO, readTVar, retry,throwSTM,STM)
-import GHC.IO (mask_, onException)
+                      threadStatus, writeTVar, newTVarIO, readTVar, retry,
+                      throwSTM, STM, yield)
+import GHC.IO (mask_, uninterruptibleMask_, onException)
 import GHC.IO.Exception (ioError)
 import GHC.IOArray (IOArray, newIOArray, readIOArray, writeIOArray,
                     boundsIOArray)
@@ -40,6 +50,7 @@ import GHC.Event.Manager (Event, EventManager, evtRead, evtWrite, loop,
                              new, registerFd, unregisterFd_)
 import qualified GHC.Event.Manager as M
 import qualified GHC.Event.TimerManager as TM
+import GHC.Ix (inRange)
 import GHC.Num ((-), (+))
 import GHC.Real (fromIntegral)
 import GHC.Show (showSignedInt)
@@ -52,6 +63,10 @@ import System.Posix.Types (Fd)
 -- There is no guarantee that the thread will be rescheduled promptly
 -- when the delay has expired, but the thread will never continue to
 -- run /earlier/ than specified.
+--
+-- Be careful not to exceed @maxBound :: Int@, which on 32-bit machines is only
+-- 2147483647 μs, less than 36 minutes.
+--
 threadDelay :: Int -> IO ()
 threadDelay usecs = mask_ $ do
   mgr <- getSystemTimerManager
@@ -61,6 +76,9 @@ threadDelay usecs = mask_ $ do
 
 -- | Set the value of returned TVar to True after a given number of
 -- microseconds. The caveats associated with threadDelay also apply.
+--
+-- Be careful not to exceed @maxBound :: Int@, which on 32-bit machines is only
+-- 2147483647 μs, less than 36 minutes.
 --
 registerDelay :: Int -> IO (TVar Bool)
 registerDelay usecs = do
@@ -97,19 +115,44 @@ threadWaitWrite = threadWait evtWrite
 closeFdWith :: (Fd -> IO ())        -- ^ Action that performs the close.
             -> Fd                   -- ^ File descriptor to close.
             -> IO ()
-closeFdWith close fd = do
-  eventManagerArray <- readIORef eventManager
-  let (low, high) = boundsIOArray eventManagerArray
-  mgrs <- flip mapM [low..high] $ \i -> do
-    Just (_,!mgr) <- readIOArray eventManagerArray i
-    return mgr
-  mask_ $ do
-    tables <- flip mapM mgrs $ \mgr -> takeMVar $ M.callbackTableVar mgr fd
-    cbApps <- zipWithM (\mgr table -> M.closeFd_ mgr table fd) mgrs tables
-    close fd `finally` sequence_ (zipWith3 finish mgrs tables cbApps)
+closeFdWith close fd = close_loop
   where
     finish mgr table cbApp = putMVar (M.callbackTableVar mgr fd) table >> cbApp
     zipWithM f xs ys = sequence (zipWith f xs ys)
+      -- The array inside 'eventManager' can be swapped out at any time, see
+      -- 'ioManagerCapabilitiesChanged'. See #21651. We detect this case by
+      -- checking the array bounds before and after. When such a swap has
+      -- happened we cleanup and try again
+    close_loop = do
+      eventManagerArray <- readIORef eventManager
+      let ema_bounds@(low, high) = boundsIOArray eventManagerArray
+      mgrs <- flip mapM [low..high] $ \i -> do
+        Just (_,!mgr) <- readIOArray eventManagerArray i
+        return mgr
+
+      -- 'takeMVar', and 'M.closeFd_' might block, although for a very short time.
+      -- To make 'closeFdWith' safe in presence of asynchronous exceptions we have
+      -- to use uninterruptible mask.
+      join $ uninterruptibleMask_ $ do
+        tables <- flip mapM mgrs $ \mgr -> takeMVar $ M.callbackTableVar mgr fd
+        new_ema_bounds <- boundsIOArray `fmap` readIORef eventManager
+        -- Here we exploit Note [The eventManager Array]
+        if new_ema_bounds /= ema_bounds
+          then do
+            -- the array has been modified.
+            -- mgrs still holds the right EventManagers, by the Note.
+            -- new_ema_bounds must be larger than ema_bounds, by the note.
+            -- return the MVars we took and try again
+            sequence_ $ zipWith (\mgr table -> finish mgr table (pure ())) mgrs tables
+            pure close_loop
+          else do
+            -- We surely have taken all the appropriate MVars. Even if the array
+            -- has been swapped, our mgrs is still correct.
+            -- Remove the Fd from all callback tables, close the Fd, and run all
+            -- callbacks.
+            cbApps <- zipWithM (\mgr table -> M.closeFd_ mgr table fd) mgrs tables
+            close fd `finally` sequence_ (zipWith3 finish mgrs tables cbApps)
+            pure (pure ())
 
 threadWait :: Event -> Fd -> IO ()
 threadWait evt fd = mask_ $ do
@@ -173,10 +216,24 @@ threadWaitWriteSTM = threadWaitSTM evtWrite
 getSystemEventManager :: IO (Maybe EventManager)
 getSystemEventManager = do
   t <- myThreadId
-  (cap, _) <- threadCapability t
   eventManagerArray <- readIORef eventManager
-  mmgr <- readIOArray eventManagerArray cap
-  return $ fmap snd mmgr
+  let r = boundsIOArray eventManagerArray
+  (cap, _) <- threadCapability t
+  -- It is possible that we've just increased the number of capabilities and the
+  -- new EventManager has not yet been constructed by
+  -- 'ioManagerCapabilitiesChanged'. We expect this to happen very rarely.
+  -- T21561 exercises this.
+  -- Two options to proceed:
+  --  1) return the EventManager for capability 0. This is guaranteed to exist,
+  --     and "shouldn't" cause any correctness issues.
+  --  2) Busy wait, with or without a call to 'yield'. This can't deadlock,
+  --     because we must be on a brand capability and there must be a call to
+  --     'ioManagerCapabilitiesChanged' pending.
+  --
+  -- We take the second option, with the yield, judging it the most robust.
+  if not (inRange r cap)
+    then yield >> getSystemEventManager
+    else fmap snd `fmap` readIOArray eventManagerArray cap
 
 getSystemEventManager_ :: IO EventManager
 getSystemEventManager_ = do
@@ -187,6 +244,22 @@ getSystemEventManager_ = do
 foreign import ccall unsafe "getOrSetSystemEventThreadEventManagerStore"
     getOrSetSystemEventThreadEventManagerStore :: Ptr a -> IO (Ptr a)
 
+-- Note [The eventManager Array]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-- A mutable array holding the current EventManager for each capability
+-- An entry is Nothing only while the eventmanagers are initialised, see
+-- 'startIOManagerThread' and 'ioManagerCapabilitiesChanged'.
+-- The 'ThreadId' at array position 'cap'  will have been 'forkOn'ed capabality
+-- 'cap'.
+-- The array will be swapped with newer arrays when the number of capabilities
+-- changes(via 'setNumCapabilities'). However:
+--   * the size of the arrays will never decrease; and
+--   * The 'EventManager's in the array are not replaced with other
+--     'EventManager' constructors.
+--
+-- This is a similar strategy as the rts uses for it's
+-- capabilities array (n_capabilities is the size of the array,
+-- enabled_capabilities' is the number of active capabilities).
 eventManager :: IORef (IOArray Int (Maybe (ThreadId, EventManager)))
 eventManager = unsafePerformIO $ do
     numCaps <- getNumCapabilities
@@ -196,8 +269,7 @@ eventManager = unsafePerformIO $ do
 {-# NOINLINE eventManager #-}
 
 numEnabledEventManagers :: IORef Int
-numEnabledEventManagers = unsafePerformIO $ do
-  newIORef 0
+numEnabledEventManagers = unsafePerformIO $ newIORef 0
 {-# NOINLINE numEnabledEventManagers #-}
 
 foreign import ccall unsafe "getOrSetSystemEventThreadIOManagerThreadStore"
@@ -212,9 +284,10 @@ ioManagerLock = unsafePerformIO $ do
    sharedCAF m getOrSetSystemEventThreadIOManagerThreadStore
 
 getSystemTimerManager :: IO TM.TimerManager
-getSystemTimerManager = do
-  Just mgr <- readIORef timerManager
-  return mgr
+getSystemTimerManager =
+  fromMaybe err `fmap` readIORef timerManager
+    where
+      err = error "GHC.Event.Thread.getSystemTimerManager: the TimerManager requires linking against the threaded runtime"
 
 foreign import ccall unsafe "getOrSetSystemTimerThreadEventManagerStore"
     getOrSetSystemTimerThreadEventManagerStore :: Ptr a -> IO (Ptr a)
@@ -281,7 +354,7 @@ startIOManagerThread eventManagerArray i = do
         ThreadFinished -> create
         ThreadDied     -> do
           -- Sanity check: if the thread has died, there is a chance
-          -- that event manager is still alive. This could happend during
+          -- that event manager is still alive. This could happened during
           -- the fork, for example. In this case we should clean up
           -- open pipes and everything else related to the event manager.
           -- See #4449
@@ -308,7 +381,7 @@ startTimerManagerThread = modifyMVar_ timerManagerThreadVar $ \old -> do
         ThreadFinished -> create
         ThreadDied     -> do
           -- Sanity check: if the thread has died, there is a chance
-          -- that event manager is still alive. This could happend during
+          -- that event manager is still alive. This could happened during
           -- the fork, for example. In this case we should clean up
           -- open pipes and everything else related to the event manager.
           -- See #4449
@@ -323,7 +396,7 @@ startTimerManagerThread = modifyMVar_ timerManagerThreadVar $ \old -> do
 foreign import ccall unsafe "rtsSupportsBoundThreads" threaded :: Bool
 
 ioManagerCapabilitiesChanged :: IO ()
-ioManagerCapabilitiesChanged = do
+ioManagerCapabilitiesChanged =
   withMVar ioManagerLock $ \_ -> do
     new_n_caps <- getNumCapabilities
     numEnabled <- readIORef numEnabledEventManagers
@@ -347,16 +420,28 @@ ioManagerCapabilitiesChanged = do
                 startIOManagerThread new_eventManagerArray
 
               -- update the event manager array reference:
-              writeIORef eventManager new_eventManagerArray
+              atomicWriteIORef eventManager new_eventManagerArray
+              -- We need an atomic write here because 'eventManager' is accessed
+              -- unsynchronized in 'getSystemEventManager' and 'closeFdWith'
       else when (new_n_caps > numEnabled) $
             forM_ [numEnabled..new_n_caps-1] $ \i -> do
               Just (_,mgr) <- readIOArray eventManagerArray i
               tid <- restartPollLoop mgr i
               writeIOArray eventManagerArray i (Just (tid,mgr))
 
+#if defined(wasm32_HOST_ARCH)
+c_setIOManagerControlFd :: CUInt -> CInt -> IO ()
+c_setIOManagerControlFd _ _ = pure ()
+
+c_setTimerManagerControlFd :: CInt -> IO ()
+c_setTimerManagerControlFd _ = pure ()
+#else
 -- Used to tell the RTS how it can send messages to the I/O manager.
 foreign import ccall unsafe "setIOManagerControlFd"
    c_setIOManagerControlFd :: CUInt -> CInt -> IO ()
 
 foreign import ccall unsafe "setTimerManagerControlFd"
    c_setTimerManagerControlFd :: CInt -> IO ()
+#endif
+
+#endif

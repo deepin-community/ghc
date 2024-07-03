@@ -1,10 +1,8 @@
+{-# LANGUAGE MagicHash #-}
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE UnboxedTuples #-}
 {-# LANGUAGE Unsafe #-}
-{-# LANGUAGE NoImplicitPrelude
-           , BangPatterns
-           , MagicHash
-           , UnboxedTuples
-           , StandaloneDeriving
-  #-}
+
 {-# OPTIONS_HADDOCK not-home #-}
 
 -----------------------------------------------------------------------------
@@ -26,10 +24,18 @@ module GHC.Weak (
         mkWeak,
         deRefWeak,
         finalize,
-        runFinalizerBatch
+
+        -- * Handling exceptions
+        -- | When an exception is thrown by a finalizer called by the
+        -- garbage collector, GHC calls a global handler which can be set with
+        -- 'setFinalizerExceptionHandler'. Note that any exceptions thrown by
+        -- this handler will be ignored.
+        setFinalizerExceptionHandler,
+        getFinalizerExceptionHandler
     ) where
 
 import GHC.Base
+import GHC.Weak.Finalize
 
 {-|
 A weak pointer object with a key and a value.  The value has type @v@.
@@ -53,7 +59,7 @@ addition to finalizers.
 
 References from the finalizer to the key are treated in the same way
 as references from the value to the key: they do not keep the key
-alive.  A finalizer may therefore ressurrect the key, perhaps by
+alive.  A finalizer may therefore resurrect the key, perhaps by
 storing it in the same data structure.
 
 The finalizer, and the relationship between the key and the value,
@@ -79,14 +85,13 @@ finalizer running earlier than you expected.  This is not a problem
 for caches and memo tables where early finalization is benign.
 
 Finalizers /can/ be used reliably for types that are created explicitly
-and have identity, such as @IORef@ and @MVar@.  However, to place a
-finalizer on one of these types, you should use the specific operation
-provided for that type, e.g. @mkWeakIORef@ and @addMVarFinalizer@
-respectively (the non-uniformity is accidental).  These operations
-attach the finalizer to the primitive object inside the box
-(e.g. @MutVar#@ in the case of @IORef@), because attaching the
-finalizer to the box itself fails when the outer box is optimised away
-by the compiler.
+and have identity, such as @IORef@, @MVar@, and @TVar@.  However, to
+place a finalizer on one of these types, you should use the specific
+operation provided for that type, e.g. @mkWeakIORef@, @mkWeakMVar@ and
+@mkWeakTVar@ respectively.  These operations attach the finalizer to
+the primitive object inside the box (e.g. @MutVar#@ in the case of
+@IORef@), because attaching the finalizer to the box itself fails when
+the outer box is optimised away by the compiler.
 
 -}
 data Weak v = Weak (Weak# v)
@@ -133,25 +138,3 @@ Instance Eq (Weak v) where
   (Weak w1) == (Weak w2) = w1 `sameWeak#` w2
 -}
 
-
--- run a batch of finalizers from the garbage collector.  We're given
--- an array of finalizers and the length of the array, and we just
--- call each one in turn.
---
--- the IO primitives are inlined by hand here to get the optimal
--- code (sigh) --SDM.
-
-runFinalizerBatch :: Int -> Array# (State# RealWorld -> State# RealWorld)
-                  -> IO ()
-runFinalizerBatch (I# n) arr =
-   let  go m  = IO $ \s ->
-                  case m of
-                  0# -> (# s, () #)
-                  _  -> let !m' = m -# 1# in
-                        case indexArray# arr m' of { (# io #) ->
-                        case catch# (\p -> (# io p, () #))
-                                    (\_ s'' -> (# s'', () #)) s of          {
-                         (# s', _ #) -> unIO (go m') s'
-                        }}
-   in
-        go n

@@ -15,7 +15,7 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#include "PosixSource.h"
+#include "rts/PosixSource.h"
 #include "Rts.h"
 
 #include "Storage.h"
@@ -26,6 +26,16 @@
 #include <string.h>
 
 static void  initMBlock(void *mblock, uint32_t node);
+
+/*
+ * By default the DEBUG RTS is built with block allocator assertions
+ * enabled. However, these are quite expensive and consequently it can
+ * sometimes be useful to disable them if debugging an issue known to be
+ * elsewhere
+ */
+#if defined(DEBUG)
+#define BLOCK_ALLOC_DEBUG
+#endif
 
 /* -----------------------------------------------------------------------------
 
@@ -161,10 +171,22 @@ static void  initMBlock(void *mblock, uint32_t node);
 static bdescr *free_list[MAX_NUMA_NODES][NUM_FREE_LISTS];
 static bdescr *free_mblock_list[MAX_NUMA_NODES];
 
+// For avoiding quadratic runtime performance when freeing a large number of
+// mblocks during a single GC run, free will be deferred to a separate free list
+// that foregoes sorting and coalecense. As the final step in a GC run we can
+// then separately sort the deferred list, and merge it with the actual free
+// list in one go.
+static bool defer_mblock_frees;
+static bdescr *deferred_free_mblock_list[MAX_NUMA_NODES];
+
 W_ n_alloc_blocks;   // currently allocated blocks
 W_ hw_alloc_blocks;  // high-water allocated blocks
 
 W_ n_alloc_blocks_by_node[MAX_NUMA_NODES];
+
+
+static bdescr* splitDeferredList(bdescr* head);
+static void sortDeferredList(bdescr** head);
 
 /* -----------------------------------------------------------------------------
    Initialisation
@@ -233,6 +255,12 @@ initGroup(bdescr *head)
       last->blocks = 0;
       last->link = head;
   }
+
+#if defined(BLOCK_ALLOC_DEBUG)
+  for (uint32_t i=0; i < head->blocks; i++) {
+      head[i].flags = 0;
+  }
+#endif
 }
 
 #if SIZEOF_VOID_P == SIZEOF_LONG
@@ -310,7 +338,7 @@ setup_tail (bdescr *bd)
 // Take a free block group bd, and split off a group of size n from
 // it.  Adjust the free list as necessary, and return the new group.
 static bdescr *
-split_free_block (bdescr *bd, uint32_t node, W_ n, uint32_t ln)
+split_free_block (bdescr *bd, uint32_t node, W_ n, uint32_t ln /* log_2_ceil(n) */)
 {
     bdescr *fg; // free group
 
@@ -325,6 +353,81 @@ split_free_block (bdescr *bd, uint32_t node, W_ n, uint32_t ln)
     return fg;
 }
 
+// Take N blocks off the end, free the rest.
+static bdescr *
+split_block_high (bdescr *bd, W_ n)
+{
+    ASSERT(bd->blocks > n);
+
+    bdescr* ret = bd + bd->blocks - n; // take n blocks off the end
+    ret->blocks = n;
+    ret->start = ret->free = bd->start + (bd->blocks - n)*BLOCK_SIZE_W;
+    ret->link = NULL;
+
+    bd->blocks -= n;
+
+    setup_tail(ret);
+    setup_tail(bd);
+    freeGroup(bd);
+
+    return ret;
+}
+
+// Like `split_block_high`, but takes n blocks off the beginning rather
+// than the end.
+static bdescr *
+split_block_low (bdescr *bd, W_ n)
+{
+    ASSERT(bd->blocks > n);
+
+    bdescr* bd_ = bd + n;
+    bd_->blocks = bd->blocks - n;
+    bd_->start = bd_->free = bd->start + n*BLOCK_SIZE_W;
+
+    bd->blocks = n;
+
+    setup_tail(bd_);
+    setup_tail(bd);
+    freeGroup(bd_);
+
+    return bd;
+}
+
+
+/* Find a fitting block for the allocation request in the given free list.
+   Returns:
+     - not NULL: when an exact match was found in the free list.
+     - NULL: when no exact match was found. In this case, the out parameter
+       `best` can be inspected to get the best fitting block from the free list.
+ */
+static bdescr *
+alloc_mega_group_from_free_list (bdescr** free_list_head, StgWord n, bdescr** best)
+{
+    bdescr *bd, *prev;
+    *best = NULL;
+    prev = NULL;
+    for (bd = *free_list_head; bd != NULL; prev = bd, bd = bd->link)
+    {
+        if (bd->blocks == n)
+        {
+            if (prev) {
+                prev->link = bd->link;
+            } else {
+                *free_list_head = bd->link;
+            }
+            return bd;
+        }
+        else if (bd->blocks > n)
+        {
+            if (!*best || bd->blocks < (*best)->blocks)
+            {
+                *best = bd;
+            }
+        }
+    }
+    return NULL;
+}
+
 /* Only initializes the start pointers on the first megablock and the
  * blocks field of the first bdescr; callers are responsible for calling
  * initGroup afterwards.
@@ -332,34 +435,37 @@ split_free_block (bdescr *bd, uint32_t node, W_ n, uint32_t ln)
 static bdescr *
 alloc_mega_group (uint32_t node, StgWord mblocks)
 {
-    bdescr *best, *bd, *prev;
+    bdescr *best, *bd;
     StgWord n;
 
     n = MBLOCK_GROUP_BLOCKS(mblocks);
 
-    best = NULL;
-    prev = NULL;
-    for (bd = free_mblock_list[node]; bd != NULL; prev = bd, bd = bd->link)
+    if(defer_mblock_frees)
     {
-        if (bd->blocks == n)
+        // Freeing mega groups is currently deferred. Try to serve new requests
+        // preferentially from our deferred free list.
+        bd = alloc_mega_group_from_free_list(&deferred_free_mblock_list[node], n, &best);
+        if(bd)
         {
-            if (prev) {
-                prev->link = bd->link;
-            } else {
-                free_mblock_list[node] = bd->link;
-            }
             return bd;
         }
-        else if (bd->blocks > n)
+        else if(!best)
         {
-            if (!best || bd->blocks < best->blocks)
-            {
-                best = bd;
-            }
+            // If there was neither an exact nor a best match, try the regular free list.
+            bd = alloc_mega_group_from_free_list(&free_mblock_list[node], n, &best);
         }
     }
+    else
+    {
+        // Otherwise, just always use the regular free list
+        bd = alloc_mega_group_from_free_list(&free_mblock_list[node], n, &best);
+    }
 
-    if (best)
+    if (bd)
+    {
+        return bd;
+    }
+    else if (best)
     {
         // we take our chunk off the end here.
         StgWord best_mblocks  = BLOCKS_TO_MBLOCKS(best->blocks);
@@ -456,8 +562,110 @@ allocGroupOnNode (uint32_t node, W_ n)
     }
 
 finish:
-    IF_DEBUG(sanity, memset(bd->start, 0xaa, bd->blocks * BLOCK_SIZE));
+    IF_DEBUG(zero_on_gc, memset(bd->start, 0xaa, bd->blocks * BLOCK_SIZE));
     IF_DEBUG(sanity, checkFreeListSanity());
+    return bd;
+}
+
+// Allocate `n` blocks aligned to `n` blocks, e.g. when n = 8, the blocks will
+// be aligned at `8 * BLOCK_SIZE`. For a group with `n` blocks this can be used
+// for easily accessing the beginning of the group from a location p in the
+// group with
+//
+//     p % (BLOCK_SIZE*n)
+//
+// Used by the non-moving collector for allocating segments.
+//
+// Because the storage manager does not support aligned allocations, we have to
+// allocate `2*n - 1` blocks here to make sure we'll be able to find an aligned
+// region in the allocated blocks. After finding the aligned area we want to
+// free slop on the low and high sides, and block allocator doesn't support
+// freeing only some portion of a megablock (we can only free whole megablocks).
+// So we disallow allocating megablocks here, and allow allocating at most
+// `BLOCKS_PER_MBLOCK / 2` blocks.
+bdescr *
+allocAlignedGroupOnNode (uint32_t node, W_ n)
+{
+    // allocate enough blocks to have enough space aligned at n-block boundary
+    // free any slops on the low and high side of this space
+
+    // number of blocks to allocate to make sure we have enough aligned space
+    W_ num_blocks = 2*n - 1;
+
+    if (num_blocks >= BLOCKS_PER_MBLOCK) {
+        barf("allocAlignedGroupOnNode: allocating megablocks is not supported\n"
+             "    requested blocks: %" FMT_Word "\n"
+             "    required for alignment: %" FMT_Word "\n"
+             "    megablock size (in blocks): %" FMT_Word,
+             n, num_blocks, (W_) BLOCKS_PER_MBLOCK);
+    }
+
+    W_ group_size = n * BLOCK_SIZE;
+
+    // To reduce splitting and fragmentation we use allocLargeChunkOnNode here.
+    // Tweak the max allocation to avoid allocating megablocks. Splitting slop
+    // below doesn't work with megablocks (freeGroup can't free only a portion
+    // of a megablock so we can't allocate megablocks and free some parts of
+    // them).
+    W_ max_blocks = stg_min(num_blocks * 3, BLOCKS_PER_MBLOCK - 1);
+    bdescr *bd = allocLargeChunkOnNode(node, num_blocks, max_blocks);
+    // We may allocate more than num_blocks, so update it
+    num_blocks = bd->blocks;
+
+    // slop on the low side
+    W_ slop_low = 0;
+    if ((uintptr_t)bd->start % group_size != 0) {
+        slop_low = group_size - ((uintptr_t)bd->start % group_size);
+    }
+
+    W_ slop_high = (num_blocks * BLOCK_SIZE) - group_size - slop_low;
+
+    ASSERT((slop_low % BLOCK_SIZE) == 0);
+    ASSERT((slop_high % BLOCK_SIZE) == 0);
+
+    W_ slop_low_blocks = slop_low / BLOCK_SIZE;
+    W_ slop_high_blocks = slop_high / BLOCK_SIZE;
+
+    ASSERT(slop_low_blocks + slop_high_blocks + n == num_blocks);
+
+#if defined(BLOCK_ALLOC_DEBUG)
+    checkFreeListSanity();
+    W_ free_before = countFreeList();
+#endif
+
+    if (slop_low_blocks != 0) {
+        bd = split_block_high(bd, num_blocks - slop_low_blocks);
+        ASSERT(countBlocks(bd) == num_blocks - slop_low_blocks);
+    }
+
+#if defined(BLOCK_ALLOC_DEBUG)
+    ASSERT(countFreeList() == free_before + slop_low_blocks);
+    checkFreeListSanity();
+#endif
+
+    // At this point the bd should be aligned, but we may have slop on the high side
+    ASSERT((uintptr_t)bd->start % group_size == 0);
+
+#if defined(BLOCK_ALLOC_DEBUG)
+    free_before = countFreeList();
+#endif
+
+    if (slop_high_blocks != 0) {
+        bd = split_block_low(bd, n);
+        ASSERT(bd->blocks == n);
+    }
+
+#if defined(BLOCK_ALLOC_DEBUG)
+    ASSERT(countFreeList() == free_before + slop_high_blocks);
+    checkFreeListSanity();
+#endif
+
+    // Should still be aligned
+    ASSERT((uintptr_t)bd->start % group_size == 0);
+
+    // Just to make sure I get this right
+    ASSERT(Bdescr(bd->start) == bd);
+
     return bd;
 }
 
@@ -531,7 +739,7 @@ bdescr* allocLargeChunkOnNode (uint32_t node, W_ min, W_ max)
 
     recordAllocatedBlocks(node, bd->blocks);
 
-    IF_DEBUG(sanity, memset(bd->start, 0xaa, bd->blocks * BLOCK_SIZE));
+    IF_DEBUG(zero_on_gc, memset(bd->start, 0xaa, bd->blocks * BLOCK_SIZE));
     IF_DEBUG(sanity, checkFreeListSanity());
     return bd;
 }
@@ -610,34 +818,114 @@ free_mega_group (bdescr *mg)
     bdescr *bd, *prev;
     uint32_t node;
 
-    // Find the right place in the free list.  free_mblock_list is
-    // sorted by *address*, not by size as the free_list is.
-    prev = NULL;
     node = mg->node;
-    bd = free_mblock_list[node];
-    while (bd && bd->start < mg->start) {
-        prev = bd;
-        bd = bd->link;
-    }
 
-    // coalesce backwards
-    if (prev)
-    {
-        mg->link = prev->link;
-        prev->link = mg;
-        mg = coalesce_mblocks(prev);
+    if(defer_mblock_frees) {
+        // Put the block on the deferred free list without coalescing.
+        mg->link = deferred_free_mblock_list[node];
+        deferred_free_mblock_list[node] = mg;
+    } else {
+        // Find the right place in the free list.  free_mblock_list is
+        // sorted by *address*, not by size as the free_list is.
+        prev = NULL;
+        bd = free_mblock_list[node];
+        while (bd && bd->start < mg->start) {
+            prev = bd;
+            bd = bd->link;
+        }
+
+        // coalesce backwards
+        if (prev)
+        {
+            mg->link = prev->link;
+            prev->link = mg;
+            mg = coalesce_mblocks(prev);
+        }
+        else
+        {
+            mg->link = free_mblock_list[node];
+            free_mblock_list[node] = mg;
+        }
+        // coalesce forwards
+        coalesce_mblocks(mg);
+
+        IF_DEBUG(sanity, checkFreeListSanity());
     }
-    else
-    {
-        mg->link = free_mblock_list[node];
-        free_mblock_list[node] = mg;
+}
+
+static void
+free_deferred_mega_groups (uint32_t node)
+{
+    bdescr *mg, *bd, *prev, *new_head;
+
+    sortDeferredList(&deferred_free_mblock_list[node]);
+
+    new_head = deferred_free_mblock_list[node];
+    deferred_free_mblock_list[node] = NULL;
+
+    // Keeping track of the location in the free list
+    prev = NULL;
+    bd = free_mblock_list[node];
+
+    while(new_head != NULL) {
+        // Obtain mblock to free
+        mg = new_head;
+        new_head = new_head->link;
+
+        // Find the right place in the free list. This is similar to the process
+        // in `free_mega_group`, but we can exploit that the deferred list is
+        // sorted: the search starts out where the previous mblock was inserted.
+        // This means we only need to traverse the free list once to free all
+        // the mblocks, rather than once per mblock.
+        while (bd && bd->start < mg->start) {
+            prev = bd;
+            bd = bd->link;
+        }
+
+        // coalesce backwards
+        if (prev)
+        {
+            mg->link = prev->link;
+            prev->link = mg;
+            mg = coalesce_mblocks(prev);
+        }
+        else
+        {
+            mg->link = free_mblock_list[node];
+            free_mblock_list[node] = mg;
+        }
+
+        // coalesce forwards
+        coalesce_mblocks(mg);
+
+        // initialize search for next round
+        prev = mg;
+        bd = prev->link;
     }
-    // coalesce forwards
-    coalesce_mblocks(mg);
 
     IF_DEBUG(sanity, checkFreeListSanity());
 }
 
+
+/* Note [Data races in freeGroup]
+ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ * freeGroup commits a rather serious concurrency sin in its block coalescence
+ * logic: When freeing a block it looks at bd->free of the previous/next block
+ * to see whether it is allocated. However, the free'ing thread likely does not
+ * own the previous/next block, nor do we make any attempt to synchronize with
+ * the thread that *does* own it; this makes this access a data race.
+ *
+ * The original design argued that this was correct because `bd->free` will
+ * only take a value of -1 when the block is free and thereby owned by the
+ * storage manager. However, this is nevertheless unsafe under the C11 data
+ * model, which guarantees no particular semantics for data races.
+ *
+ * We currently assume (and hope) we won't see torn values and consequently
+ * we will never see `bd->free == -1` for an allocated block which we do not
+ * own. However, this is all extremely dodgy.
+ *
+ * This is tracked as #18913.
+ */
 
 void
 freeGroup(bdescr *p)
@@ -648,15 +936,21 @@ freeGroup(bdescr *p)
   // not true in multithreaded GC:
   // ASSERT_SM_LOCK();
 
-  ASSERT(p->free != (P_)-1);
+  ASSERT(RELAXED_LOAD(&p->free) != (P_)-1);
+
+#if defined(BLOCK_ALLOC_DEBUG)
+  for (uint32_t i=0; i < p->blocks; i++) {
+      p[i].flags = 0;
+  }
+#endif
 
   node = p->node;
 
-  p->free = (void *)-1;  /* indicates that this block is free */
-  p->gen = NULL;
-  p->gen_no = 0;
+  RELAXED_STORE(&p->free, (void *) -1);  /* indicates that this block is free */
+  RELAXED_STORE(&p->gen, NULL);
+  RELAXED_STORE(&p->gen_no, 0);
   /* fill the block group with garbage if sanity checking is on */
-  IF_DEBUG(sanity,memset(p->start, 0xaa, (W_)p->blocks * BLOCK_SIZE));
+  IF_DEBUG(zero_on_gc, memset(p->start, 0xaa, (W_)p->blocks * BLOCK_SIZE));
 
   if (p->blocks == 0) barf("freeGroup: block size is zero");
 
@@ -680,7 +974,11 @@ freeGroup(bdescr *p)
   {
       bdescr *next;
       next = p + p->blocks;
-      if (next <= LAST_BDESCR(MBLOCK_ROUND_DOWN(p)) && next->free == (P_)-1)
+
+      // See Note [Data races in freeGroup].
+      TSAN_ANNOTATE_BENIGN_RACE(&next->free, "freeGroup");
+      if (next <= LAST_BDESCR(MBLOCK_ROUND_DOWN(p))
+          && RELAXED_LOAD(&next->free) == (P_)-1)
       {
           p->blocks += next->blocks;
           ln = log_2(next->blocks);
@@ -701,7 +999,9 @@ freeGroup(bdescr *p)
       prev = p - 1;
       if (prev->blocks == 0) prev = prev->link; // find the head
 
-      if (prev->free == (P_)-1)
+      // See Note [Data races in freeGroup].
+      TSAN_ANNOTATE_BENIGN_RACE(&prev->free, "freeGroup");
+      if (RELAXED_LOAD(&prev->free) == (P_)-1)
       {
           ln = log_2(prev->blocks);
           dbl_link_remove(prev, &free_list[node][ln]);
@@ -769,6 +1069,93 @@ initMBlock(void *mblock, uint32_t node)
     }
 }
 
+// Find the midpoint of the linked list.
+static bdescr* splitDeferredList(bdescr* head) {
+    bdescr *fast, *slow, *second_half;
+
+    slow = head;
+    fast = slow->link;
+
+    while(fast != NULL) {
+        fast = fast->link;
+        if(fast) {
+            fast = fast->link;
+            slow = slow->link;
+        }
+    }
+
+    second_half = slow->link;
+    // Cap first list at half
+    slow->link = NULL;
+    return second_half;
+}
+
+static void sortDeferredList(bdescr** head) {
+    bdescr *first_half, *second_half, *cur;
+
+    if(*head == NULL || (*head)->link == NULL) {
+        // 0 or 1 elements, done
+        return;
+    }
+
+    first_half = *head;
+    second_half = splitDeferredList(*head);
+
+    sortDeferredList(&first_half);
+    sortDeferredList(&second_half);
+
+    // Sort by address
+    if(first_half->start < second_half->start) {
+        *head = first_half;
+        first_half = first_half->link;
+    } else {
+        *head = second_half;
+        second_half = second_half->link;
+    }
+    cur = *head;
+
+    while(first_half != NULL && second_half != NULL) {
+        if(first_half->start < second_half->start) {
+            cur->link = first_half;
+            first_half = first_half->link;
+        } else {
+            cur->link = second_half;
+            second_half = second_half->link;
+        }
+        cur = cur->link;
+    }
+
+    // Now one of the two is exhausted, so order doesn't matter
+    while(first_half != NULL) {
+        cur->link = first_half;
+        first_half = first_half->link;
+        cur = cur->link;
+    }
+    while(second_half != NULL) {
+        cur->link = second_half;
+        second_half = second_half->link;
+        cur = cur->link;
+    }
+}
+
+void deferMBlockFreeing(void) {
+    if(defer_mblock_frees) {
+        barf("MBlock freeing is already deferred");
+    }
+    defer_mblock_frees = true;
+}
+
+void commitMBlockFreeing(void) {
+    if(! defer_mblock_frees) {
+        barf("MBlock freeing was never deferred");
+    }
+    defer_mblock_frees = false;
+
+    for(uint32_t node = 0; node < n_numa_nodes; node++) {
+        free_deferred_mega_groups(node);
+    }
+}
+
 /* -----------------------------------------------------------------------------
    Stats / metrics
    -------------------------------------------------------------------------- */
@@ -804,11 +1191,26 @@ countAllocdBlocks(bdescr *bd)
     return n;
 }
 
-void returnMemoryToOS(uint32_t n /* megablocks */)
+// Returns the number of blocks which were able to be freed
+uint32_t returnMemoryToOS(uint32_t n /* megablocks */)
 {
+#if defined(wasm32_HOST_ARCH)
+    // See Note [Megablock allocator on wasm].
+    return 0;
+#else
     bdescr *bd;
     uint32_t node;
     StgWord size;
+    uint32_t init_n;
+    init_n = n;
+
+    // TODO: This is inefficient because this loop will essentially result in
+    // quadratic runtime behavior: for each call to `freeMBlocks`, the
+    // USE_LARGE_ADDRESS_SPACE implementation of it will walk the internal free
+    // list to insert it at the right position, and thus traverse all previously
+    // inserted values to get to it. We can do better though: both the internal
+    // free list and the `free_mblock_list` here are sorted, so one walk should
+    // be enough.
 
     // ToDo: not fair, we free all the memory starting with node 0.
     for (node = 0; n > 0 && node < n_numa_nodes; node++) {
@@ -848,6 +1250,8 @@ void returnMemoryToOS(uint32_t n /* megablocks */)
                        n);
         }
     );
+    return (init_n - n);
+#endif
 }
 
 /* -----------------------------------------------------------------------------

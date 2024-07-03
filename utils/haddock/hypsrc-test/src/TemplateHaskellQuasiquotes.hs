@@ -1,3 +1,4 @@
+{-# LANGUAGE Haskell2010 #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module TemplateHaskellQuasiquotes where
@@ -21,7 +22,7 @@ aPattern = [p|
 
 aNumberPattern :: PatQ
 aNumberPattern = [p|
-    w @ v @ 4.5
+    w@v@4.5
   |]
 
 anExpression, anExpression2 :: ExpQ
@@ -34,6 +35,12 @@ aType :: TypeQ
 aType = [t|
     [ (Double, String) ]
   |]
+
+typedExpr1 :: Code Q ()
+typedExpr1 = [|| () ||]
+
+typedExpr :: Code Q ()
+typedExpr = [|| const $$(typedExpr1) () ||]
 
 
 

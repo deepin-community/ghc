@@ -1,33 +1,47 @@
-# FilePath [![Hackage version](https://img.shields.io/hackage/v/filepath.svg?label=Hackage)](https://hackage.haskell.org/package/filepath) [![Linux Build Status](https://img.shields.io/travis/haskell/filepath/master.svg?label=Linux%20build)](https://travis-ci.org/haskell/filepath) [![Windows Build Status](https://img.shields.io/appveyor/ci/ndmitchell/filepath/master.svg?label=Windows%20build)](https://ci.appveyor.com/project/ndmitchell/filepath)
+# FilePath [![Hackage version](https://img.shields.io/hackage/v/filepath.svg?label=Hackage)](https://hackage.haskell.org/package/filepath)
 
-The `filepath` package provides functionality for manipulating `FilePath` values, and is shipped with both [GHC](https://www.haskell.org/ghc/) and the [Haskell Platform](https://www.haskell.org/platform/). It provides three modules:
+The `filepath` package provides functionality for manipulating `FilePath` values, and is shipped with [GHC](https://www.haskell.org/ghc/).
+It provides two variants for filepaths:
 
-* [`System.FilePath.Posix`](http://hackage.haskell.org/package/filepath/docs/System-FilePath-Posix.html) manipulates POSIX/Linux style `FilePath` values (with `/` as the path separator).
-* [`System.FilePath.Windows`](http://hackage.haskell.org/package/filepath/docs/System-FilePath-Windows.html) manipulates Windows style `FilePath` values (with either `\` or `/` as the path separator, and deals with drives).
-* [`System.FilePath`](http://hackage.haskell.org/package/filepath/docs/System-FilePath.html) is an alias for the module appropriate to your platform.
+1. legacy filepaths: `type FilePath = String`
+2. operating system abstracted filepaths (`OsPath`): internally unpinned `ShortByteString` (platform-dependent encoding)
+
+It is recommended to use `OsPath` when possible, because it is more correct.
+
+For each variant there are three main modules:
+
+* `System.FilePath.Posix` / `System.OsPath.Posix` manipulates POSIX\/Linux style `FilePath` values (with `/` as the path separator).
+* `System.FilePath.Windows` / `System.OsPath.Windows` manipulates Windows style `FilePath` values (with either `\` or `/` as the path separator, and deals with drives).
+* `System.FilePath` / `System.OsPath` for dealing with current platform-specific filepaths
 
 All three modules provide the same API, and the same documentation (calling out differences in the different variants).
 
-### Should `FilePath` be an abstract data type?
+`System.OsString` is like `System.OsPath`, but more general purpose. Refer to the documentation of
+those modules for more information.
 
-The answer for this library is "no". While an abstract `FilePath` has some advantages (mostly type safety), it also has some disadvantages:
+### What is a `FilePath`?
 
-* In Haskell the definition is `type FilePath = String`, and all file-oriented functions operate on this type alias, e.g. `readFile`/`writeFile`. Any abstract type would require wrappers for these functions or lots of casts between `String` and the abstraction.
-* It is not immediately obvious what a `FilePath` is, and what is just a pure `String`. For example, `/path/file.ext` is a `FilePath`. Is `/`? `/path`? `path`? `file.ext`? `.ext`? `file`?
-* Often it is useful to represent invalid files, e.g. `/foo/*.txt` probably isn't an actual file, but a glob pattern. Other programs use `foo//bar` for globs, which is definitely not a file, but might want to be stored as a `FilePath`.
-* Some programs use syntactic non-semantic details of the `FilePath` to change their behaviour. For example, `foo`, `foo/` and `foo/.` are all similar, and refer to the same location on disk, but may behave differently when passed to command-line tools.
-* A useful step to introducing an abstract `FilePath` is to reduce the amount of manipulating `FilePath` values like lists. This library hopes to help in that effort.
+In Haskell, the legacy definition (used in `base` and Prelude) is `type FilePath = String`,
+where a Haskell `String` is a list of Unicode code points.
 
-### Developer notes
+The new definition is (simplified) `newtype OsPath = AFP ShortByteString`, where
+`ShortByteString` is an unpinned byte array and follows syscall conventions, preserving the encoding.
 
-Most of the code is in `System/FilePath/Internal.hs` which is `#include`'d into both `System/FilePath/Posix.hs` and `System/FilePath/Windows.hs` with the `IS_WINDOWS` CPP define set to either `True` or `False`. This Internal module is a bit weird in that it isn't really a Haskell module, but is more an include file.
+On unix, filenames don't have a predefined encoding as per the
+[POSIX specification](https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap03.html#tag_03_170)
+and are passed as `char[]` to syscalls.
 
-The library has extensive doc tests. Anything starting with `-- >` is transformed into a doc test as a predicate that must evaluate to `True`. These tests follow a few rules:
+On windows (at least the API used by `Win32`) filepaths are UTF-16LE strings.
 
-* Tests prefixed with `Windows:` or `Posix:` are only tested against that specific implementation - otherwise tests are run against both implementations.
-* Any single letter variable, e.g. `x`, is considered universal quantification, and is checked with `QuickCheck`.
-* If `Valid x =>` appears at the start of a doc test, that means the property will only be tested with `x` passing the `isValid` predicate.
+You are encouraged to use `OsPath` whenever possible, because it is more correct.
 
-The tests can be generated by `Generate.hs` in the root of the repo, and will be placed in `tests/TestGen.hs`. The `TestGen.hs` file is checked into the repo, and the CI scripts check that `TestGen.hs` is in sync with what would be generated a fresh - if you don't regenerate `TestGen.hs` the CI will fail.
+Also note that this is a low-level library and it makes no attempt at providing a more
+type safe variant for filepaths (e.g. by distinguishing between absolute and relative
+paths) and ensures no invariants (such as filepath validity).
 
-The `.ghci` file is set up to allow you to type `ghci` to open the library, then `:go` will regenerate the tests and run them.
+For such libraries, check out the following:
+
+* [hpath](https://hackage.haskell.org/package/hpath)
+* [path](https://hackage.haskell.org/package/path)
+* [paths](https://hackage.haskell.org/package/paths)
+* [strong-path](https://hackage.haskell.org/package/strong-path)

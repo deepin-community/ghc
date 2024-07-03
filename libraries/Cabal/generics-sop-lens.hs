@@ -33,12 +33,12 @@ data Foobar = Foobar
 
 genericLenses
     :: forall a xs proxy. (GDatatypeInfo a, GCode a ~ '[xs], All Typeable xs)
-    => proxy a 
+    => proxy a
     -> String
 genericLenses p = case gdatatypeInfo p of
     Newtype _ _ _                   -> "-- newtype deriving not implemented"
     ADT _ _  (Constructor _ :* Nil) -> "-- fieldnameless deriving not implemented"
-    ADT _ _  (Infix _ _ _ :* Nil)   -> "-- infix consturctor deriving not implemented"
+    ADT _ _  (Infix _ _ _ :* Nil)   -> "-- infix constructor deriving not implemented"
     ADT _ dn (Record _ fis :* Nil) ->
         unlines $ concatMap replaceTypes $ hcollapse $ hcmap (Proxy :: Proxy Typeable) derive fis
       where
@@ -52,12 +52,12 @@ genericLenses p = case gdatatypeInfo p of
 
 genericClassyLenses
     :: forall a xs proxy. (GDatatypeInfo a, GCode a ~ '[xs], All Typeable xs)
-    => proxy a 
+    => proxy a
     -> String
 genericClassyLenses p = case gdatatypeInfo p of
     Newtype _ _ _                   -> "-- newtype deriving not implemented"
     ADT _ _  (Constructor _ :* Nil) -> "-- fieldnameless deriving not implemented"
-    ADT _ _  (Infix _ _ _ :* Nil)   -> "-- infix consturctor deriving not implemented"
+    ADT _ _  (Infix _ _ _ :* Nil)   -> "-- infix constructor deriving not implemented"
     ADT _ dn (Record _ fis :* Nil) ->
         unlines $ concatMap replaceTypes $
             [[ "class Has" ++ dn ++ " a where"

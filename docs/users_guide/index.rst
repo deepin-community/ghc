@@ -10,24 +10,20 @@ Contents:
    :maxdepth: 4
    :numbered:
 
-   license
    intro
-   8.8.1-notes
-   8.8.2-notes
-   8.8.3-notes
-   8.8.4-notes
+   release-notes
    ghci
    runghc
    usage
-   profiling
-   sooner
-   lang
-   ffi-chap
+   exts
    extending_ghc
-   gone_wrong
+   profiling
    debug-info
+   gone_wrong
+   hints
    utils
    win32-dlls
+   wasm
    bugs
    eventlog-formats
    editing-guide
@@ -38,4 +34,3 @@ Indices and tables
 
 * :ref:`genindex`
 * :ref:`search`
-

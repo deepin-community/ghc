@@ -1,11 +1,12 @@
 {-# LANGUAGE CPP #-}
 #if __GLASGOW_HASKELL__ >= 702
 {-# LANGUAGE Safe #-}
+{-# LANGUAGE DeriveGeneric #-}
 #endif
 #if __GLASGOW_HASKELL__ >= 706
 {-# LANGUAGE PolyKinds #-}
 #endif
-#if __GLASGOW_HASKELL__ >= 710
+#if __GLASGOW_HASKELL__ >= 710 && __GLASGOW_HASKELL__ < 802
 {-# LANGUAGE AutoDeriveTypeable #-}
 #endif
 -----------------------------------------------------------------------------
@@ -35,6 +36,9 @@ module Control.Monad.Trans.Identity (
 import Control.Monad.IO.Class (MonadIO(liftIO))
 import Control.Monad.Signatures
 import Control.Monad.Trans.Class (MonadTrans(lift))
+#if MIN_VERSION_base(4,18,0)
+import Data.Foldable1 (Foldable1(foldMap1))
+#endif
 import Data.Functor.Classes
 #if MIN_VERSION_base(4,12,0)
 import Data.Functor.Contravariant
@@ -50,11 +54,21 @@ import Control.Monad.Fix (MonadFix(mfix))
 import Control.Monad.Zip (MonadZip(mzipWith))
 #endif
 import Data.Foldable
+#if !(MIN_VERSION_base(4,8,0))
 import Data.Traversable (Traversable(traverse))
+#endif
 import Prelude hiding (foldr, foldr1, foldl, foldl1, null, length)
+#if __GLASGOW_HASKELL__ >= 704
+import GHC.Generics
+#endif
 
 -- | The trivial monad transformer, which maps a monad to an equivalent monad.
 newtype IdentityT f a = IdentityT { runIdentityT :: f a }
+#if __GLASGOW_HASKELL__ >= 710
+    deriving (Generic, Generic1)
+#elif __GLASGOW_HASKELL__ >= 704
+    deriving (Generic)
+#endif
 
 instance (Eq1 f) => Eq1 (IdentityT f) where
     liftEq eq (IdentityT x) (IdentityT y) = liftEq eq x y
@@ -95,6 +109,12 @@ instance (Foldable f) => Foldable (IdentityT f) where
 #if MIN_VERSION_base(4,8,0)
     null (IdentityT t) = null t
     length (IdentityT t) = length t
+#endif
+
+#if MIN_VERSION_base(4,18,0)
+instance (Foldable1 m) => Foldable1 (IdentityT m) where
+    foldMap1 f (IdentityT t) = foldMap1 f t
+    {-# INLINE foldMap1 #-}
 #endif
 
 instance (Traversable f) => Traversable (IdentityT f) where
@@ -160,7 +180,7 @@ instance MonadTrans IdentityT where
     {-# INLINE lift #-}
 
 #if MIN_VERSION_base(4,12,0)
-instance Contravariant f => Contravariant (IdentityT f) where
+instance (Contravariant f) => Contravariant (IdentityT f) where
     contramap f = IdentityT . contramap f . runIdentityT
     {-# INLINE contramap #-}
 #endif

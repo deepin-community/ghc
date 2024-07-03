@@ -94,7 +94,7 @@ getComputerName =
       len' <- peek len
       peekTStringLen (buf, (fromIntegral len'))
   where
-    maxLength = #const MAX_COMPUTERNAME_LENGTH
+    maxLength = #const MAX_PATH
 
 foreign import WINDOWS_CCONV unsafe "GetComputerNameW"
   c_GetComputerName :: LPTSTR -> LPDWORD -> IO Bool
@@ -126,7 +126,7 @@ type COMPUTER_NAME_FORMAT = UINT
 -- Hardware Profiles
 ----------------------------------------------------------------
 {-
--- TODO: Deside HW_PROFILE_INFO type design
+-- TODO: Decide HW_PROFILE_INFO type design
 
 type LPHW_PROFILE_INFO = Ptr HW_PROFILE_INFO
 
@@ -195,7 +195,7 @@ getUserName =
   with (fromIntegral maxLength) $ \len -> do
       failIfFalse_ "GetComputerName"
         $ c_GetUserName buf len
-      -- GetUserNameW includes NUL charactor.
+      -- GetUserNameW includes NUL character.
       peekTString buf
   where
     -- This requires Lmcons.h

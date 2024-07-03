@@ -2,8 +2,11 @@
 #if __GLASGOW_HASKELL__ >= 702
 {-# LANGUAGE Safe #-}
 #endif
-#if __GLASGOW_HASKELL__ >= 710
+#if __GLASGOW_HASKELL__ >= 710 && __GLASGOW_HASKELL__ < 802
 {-# LANGUAGE AutoDeriveTypeable #-}
+#endif
+#if __GLASGOW_HASKELL__ >= 806
+{-# LANGUAGE QuantifiedConstraints #-}
 #endif
 -----------------------------------------------------------------------------
 -- |
@@ -46,14 +49,40 @@ module Control.Monad.Trans.Class (
     -- $example3
   ) where
 
--- | The class of monad transformers.  Instances should satisfy the
--- following laws, which state that 'lift' is a monad transformation:
+-- | The class of monad transformers.
+-- For any monad @m@, the result @t m@ should also be a monad,
+-- and 'lift' should be a monad transformation from @m@ to @t m@,
+-- i.e. it should satisfy the following laws:
 --
 -- * @'lift' . 'return' = 'return'@
 --
 -- * @'lift' (m >>= f) = 'lift' m >>= ('lift' . f)@
-
+--
+-- Since 0.6.0.0 and for GHC 8.6 and later, the requirement that @t m@
+-- be a 'Monad' is enforced by the implication constraint
+-- @forall m. 'Monad' m => 'Monad' (t m)@ enabled by the
+-- @QuantifiedConstraints@ extension.
+--
+-- === __Ambiguity error with GHC 9.0 to 9.2.2__
+-- These versions of GHC have a bug
+-- (<https://gitlab.haskell.org/ghc/ghc/-/issues/20582>)
+-- which causes constraints like
+--
+-- @
+-- (MonadTrans t, forall m. Monad m => Monad (t m)) => ...
+-- @
+--
+-- to be reported as ambiguous.  For transformers 0.6 and later, this can
+-- be fixed by removing the second constraint, which is implied by the first.
+#if __GLASGOW_HASKELL__ >= 806
+class (forall m. Monad m => Monad (t m)) => MonadTrans t where
+#else
+-- Prior to GHC 8.8 (base-4.13), the Monad class included fail.
+-- GHC 8.6 (base-4.12) has MonadFailDesugaring on by default, so there
+-- is no need for users defining monad transformers to define fail in
+-- the Monad instance of the transformed monad.
 class MonadTrans t where
+#endif
     -- | Lift a computation from the argument monad to the constructed monad.
     lift :: (Monad m) => m a -> t m a
 
@@ -94,16 +123,23 @@ specialized lifting combinators, called @lift@/Op/
 
 {- $strict
 
-A monad is said to be /strict/ if its '>>=' operation is strict in its first
-argument.  The base monads 'Maybe', @[]@ and 'IO' are strict:
+A monad is said to be /strict/ if its '>>=' operation (and therefore also
+'>>') is strict in its first argument.  The base monads 'Maybe', @[]@
+and 'IO' are strict:
 
->>> undefined >> return 2 :: Maybe Integer
+>>> undefined >> Just 2
+*** Exception: Prelude.undefined
+>>> undefined >> [2]
+*** Exception: Prelude.undefined
+>>> undefined >> print 2
 *** Exception: Prelude.undefined
 
-However the monad 'Data.Functor.Identity.Identity' is not:
+However the monads 'Data.Functor.Identity.Identity' and @(->) a@ are not:
 
->>> runIdentity (undefined >> return 2)
-2
+>>> undefined >> Identity 2
+Identity 2
+>>> (undefined >> (+1)) 5
+6
 
 In a strict monad you know when each action is executed, but the monad
 is not necessarily strict in the return value, or in other components

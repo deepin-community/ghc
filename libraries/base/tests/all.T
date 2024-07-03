@@ -12,24 +12,29 @@ def normalise_quotes (str):
 #--------------------------------------
 # Test functions
 #--------------------------------------
+test('SystemInfoTest', normal, compile_and_run, [''])
 test('readFloat', exit_code(1), compile_and_run, [''])
 test('enumDouble', normal, compile_and_run, [''])
 test('enumRatio', normal, compile_and_run, [''])
 test('enumNumeric', normal, compile_and_run, [''])
-test('tempfiles', normal, compile_and_run, [''])
+# N.B. the tempfile format is slightly different than this test expects on
+# Windows *except* if using WinIO. The `when` clause below can be removed
+# after WinIO becomes the default.
+test('tempfiles', when(opsys('mingw32'), only_ways(['winio'])), compile_and_run, [''])
 test('fixed', normal, compile_and_run, [''])
 test('quotOverflow', normal, compile_and_run, [''])
 test('assert', exit_code(1), compile_and_run, ['-fno-ignore-asserts'])
 test('CPUTime001', fragile(16224), compile_and_run, [''])
 test('readLitChar',   normal, compile_and_run, [''])
 test('unicode001',
-     when(platform('i386-unknown-openbsd'), expect_fail),
+     normal,
      compile_and_run,
      [''])
 test('unicode002',
-     when(platform('i386-unknown-openbsd'), expect_fail),
+     normal,
      compile_and_run,
      [''])
+test('unicode003', normal, compile_and_run, [''])
 test('data-fixed-show-read', normal, compile_and_run, [''])
 test('showDouble', normal, compile_and_run, [''])
 test('readDouble001', normal, compile_and_run, [''])
@@ -40,6 +45,7 @@ test('take001', extra_run_opts('1'), compile_and_run, [''])
 test('inits', normal, compile_and_run, [''])
 test('genericNegative001', extra_run_opts('-1'), compile_and_run, [''])
 test('ix001', normal, compile_and_run, [''])
+test('isValidNatural', normal, compile_and_run, [''])
 
 # need to add -K64m to the compiler opts, so that GHCi gets it too
 test('ioref001',
@@ -73,12 +79,13 @@ test('length001',
      # excessive amounts of stack space. So we specifically set a low
      # stack limit and mark it as failing under a few conditions.
      [extra_run_opts('+RTS -K8m -RTS'),
-     expect_fail_for(['normal', 'threaded1', 'llvm'])],
+     expect_fail_for(['normal', 'threaded1', 'llvm', 'nonmoving', 'nonmoving_thr', 'nonmoving_thr_ghc']),
+     # JS doesn't support stack limit so the test sometimes passes just fine. We decrease the timeout duration to force the failure.
+     when(js_arch(), run_timeout_multiplier(0.2))],
      compile_and_run, [''])
 
 test('ratio001', 	normal, compile_and_run, [''])
 
-test('rand001',		reqlib('random'), compile_and_run, [''])
 test('reads001',		normal, compile_and_run, [''])
 test('show001',		normal, compile_and_run, [''])
 test('text001',		normal, compile_and_run, [''])
@@ -93,13 +100,27 @@ test('dynamic004',      omit_ways(['normal', 'threaded1', 'ghci']), compile_and_
 test('dynamic005',      normal, compile_and_run, [''])
 
 enum_setups = [when(fast(), skip)]
-test('enum01',          [extra_files(['enum_processor.bat', 'enum_processor.py']),
-                         enum_setups], compile_and_run, [''])
-test('enum02',          [extra_files(['enum_processor.bat', 'enum_processor.py']),
-                         enum_setups], compile_and_run, [''])
-test('enum03',          [extra_files(['enum_processor.bat', 'enum_processor.py']),
-                         enum_setups], compile_and_run, [''])
-test('enum04',          normal, compile_and_run, [''])
+def enum_test(name):
+    """
+    These tests have a funky Python preprocessor which require some headstands
+    to run on Windows.
+    """
+    if opsys('mingw32'):
+        test(name,
+             [when(opsys('mingw32'), extra_files(['enum_processor.bat'])),
+              extra_files(['enum_processor.py'])],
+             compile_and_run,
+             ['-F -pgmF ./enum_processor.bat'])
+    else:
+        test(name,
+             [extra_files(['enum_processor.py'])],
+             compile_and_run,
+             ['-F -pgmF ./enum_processor.py'])
+
+enum_test('enum01')
+enum_test('enum02')
+enum_test('enum03')
+test('enum04', normal, compile_and_run, [''])
 
 test('exceptionsrun001',        normal, compile_and_run, [''])
 test('exceptionsrun002', 	normal, compile_and_run, [''])
@@ -137,7 +158,7 @@ test('T2528', normal, compile_and_run, [''])
 # May 2014: seems to work on msys2
 # May 2018: The behavior of printf seems very implementation dependent.
 #     so let's normalise the output.
-test('T4006', normalise_fun(normalise_quotes), compile_and_run, [''])
+test('T4006', [js_broken(22349), normalise_fun(normalise_quotes), req_process], compile_and_run, [''])
 
 test('T5943', normal, compile_and_run, [''])
 test('T5962', normal, compile_and_run, [''])
@@ -148,26 +169,29 @@ test('qsemn001', normal, compile_and_run, [''])
 
 test('T7457', normal, compile_and_run, [''])
 
-test('T7773', when(opsys('mingw32'), skip), compile_and_run, [''])
+test('T7773', [when(opsys('mingw32'), skip), js_broken(22261)], compile_and_run, [''])
 # Andreas says that T7773 will not (and should not) work on Windows
 
 # Tests for kind-polymorphic Category
 test('CatPairs', normal, compile, [''])
 test('CatEntail', normal, compile, [''])
 
-# When running with WAY=ghci, T7653 uses a lot of memory.
-test('T7653', high_memory_usage, compile_and_run, [''])
+# When running with WAY=ghci and profiled ways, T7653 uses a lot of memory.
+test('T7653', [when(opsys('mingw32'), skip),
+               omit_ways(prof_ways+['ghci'])], compile_and_run, [''])
 test('T7787', normal, compile_and_run, [''])
 
-test('topHandler01', when(opsys('mingw32'), skip), compile_and_run, [''])
+test('topHandler01', [when(opsys('mingw32'), skip), js_broken(22261), req_process], compile_and_run, [''])
 test('topHandler02',
      [when(opsys('mingw32'), skip),
       omit_ways(['ghci']),
-      signal_exit_code(2)
+      signal_exit_code(2),
+     js_broken(22261)
      ], compile_and_run, [''])
 test('topHandler03',
      [when(opsys('mingw32'), skip), ignore_stderr,
-      signal_exit_code(15)
+      signal_exit_code(15),
+     js_broken(22261)
      ], compile_and_run, [''])
 test('topHandler04',
      [when(opsys('mingw32'), skip),
@@ -177,7 +201,9 @@ test('topHandler04',
 
 test('T8766',
         [ collect_stats('bytes allocated',5)
-        , only_ways(['normal'])],
+        , only_ways(['normal'])
+        , js_broken(22261)
+        ],
       compile_and_run,
       ['-O'])
 
@@ -200,39 +226,70 @@ test('T9681', normal, compile_fail, [''])
 test('T8089',
      [exit_code(99), run_timeout_multiplier(0.01)],
      compile_and_run, [''])
-test('hWaitForInput-accurate-socket', reqlib('unix'), compile_and_run, [''])
 test('T8684', expect_broken(8684), compile_and_run, [''])
+test('hWaitForInput-accurate-stdin', [js_broken(22349), expect_broken_for(16535, threaded_ways), omit_ways(['ghci']), req_process], compile_and_run, [''])
 test('T9826',normal, compile_and_run,[''])
 test('T9848',
         [ collect_stats('bytes allocated')
-        , only_ways(['normal'])],
+        , only_ways(['normal'])
+        , js_broken(22261)
+        ],
       compile_and_run,
       ['-O'])
 test('T10149', normal, compile_and_run, [''])
 test('T11334a', normal, compile_and_run, [''])
 test('T11555', normal, compile_and_run, [''])
 test('T12494', normal, compile_and_run, [''])
-test('T12852', when(opsys('mingw32'), skip), compile_and_run, [''])
+test('T12852', [when(opsys('mingw32'), skip), js_broken(22374), req_process], compile_and_run, [''])
 test('lazySTexamples', normal, compile_and_run, [''])
 test('T11760', req_smp, compile_and_run, ['-threaded -with-rtsopts=-N2'])
 test('T12874', normal, compile_and_run, [''])
 test('T13191',
         [ collect_stats('bytes allocated', 5)
-        , only_ways(['normal'])],
+        , only_ways(['normal'])
+        , js_broken(22261)
+        ],
       compile_and_run,
       ['-O'])
-test('T13525', when(opsys('mingw32'), skip), compile_and_run, [''])
+test('T13525', [when(opsys('mingw32'), skip), js_broken(22374), req_process], compile_and_run, [''])
 test('T13097', normal, compile_and_run, [''])
 test('functorOperators', normal, compile_and_run, [''])
 test('T3474',
      [collect_stats('max_bytes_used',5),
+      js_broken(22374),
       only_ways(['normal'])],
      compile_and_run, ['-O'])
 test('T14425', normal, compile_and_run, [''])
 test('T10412', normal, compile_and_run, [''])
 test('T13896', normal, compile_and_run, [''])
-test('T13167', fragile_for(16536, ['threaded2']), compile_and_run, [''])
-test('T15349', [exit_code(1), expect_broken_for(15349, 'ghci')], compile_and_run, [''])
+# On Windows this test is fragile using the old MIO IO manager due to an
+# apparent flushing bug.
+test('T13167',
+     [ when(opsys('mingw32')
+     , only_ways(['winio', 'winio_threaded']))
+     , fragile_for(16536, concurrent_ways)
+     , js_broken(22261)
+     ],
+     compile_and_run, [''])
+test('T15183', normal, compile_and_run, [''])
+test('T15349', [exit_code(1), expect_broken_for(15349, ['ghci'])], compile_and_run, [''])
 test('T16111', exit_code(1), compile_and_run, [''])
 test('T16943a', normal, compile_and_run, [''])
 test('T16943b', normal, compile_and_run, [''])
+test('T17499', [collect_stats('bytes allocated',5), js_broken(22261)], compile_and_run, ['-O -w'])
+test('T16643', normal, compile_and_run, [''])
+test('clamp', normal, compile_and_run, [''])
+test('T18642',
+     [extra_run_opts('+RTS -T -RTS'),
+      # The nonmoving GC's residency behavior is very conservative
+      omit_ways(['nonmoving', 'nonmoving_thr', 'nonmoving_thr_sanity']),
+      js_broken(22374)],
+     compile_and_run, ['-O2'])
+test('T19288', exit_code(1), compile_and_run, [''])
+test('T19719', normal, compile_and_run, [''])
+test('T20107', extra_run_opts('+RTS -M50M'), compile_and_run, ['-package bytestring'])
+test('T22816', normal, compile_and_run, [''])
+test('trace', normal, compile_and_run, [''])
+test('listThreads', normal, compile_and_run, [''])
+test('listThreads1', normal, compile_and_run, [''])
+test('inits1tails1', normal, compile_and_run, [''])

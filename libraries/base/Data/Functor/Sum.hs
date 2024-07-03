@@ -2,6 +2,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE Safe #-}
+{-# LANGUAGE StandaloneDeriving #-}
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Data.Functor.Sum
@@ -9,7 +10,7 @@
 -- License     :  BSD-style (see the file LICENSE)
 --
 -- Maintainer  :  libraries@haskell.org
--- Stability   :  experimental
+-- Stability   :  stable
 -- Portability :  portable
 --
 -- Sums, lifted to functors.
@@ -25,7 +26,7 @@ import Control.Applicative ((<|>))
 import Data.Data (Data)
 import Data.Functor.Classes
 import GHC.Generics (Generic, Generic1)
-import Text.Read (Read(..), readListDefault, readListPrecDefault)
+import Text.Read ()
 
 -- | Lifted sum of functors.
 data Sum f g a = InL (f a) | InR (g a)
@@ -33,6 +34,15 @@ data Sum f g a = InL (f a) | InR (g a)
            , Generic  -- ^ @since 4.9.0.0
            , Generic1 -- ^ @since 4.9.0.0
            )
+
+-- | @since 4.18.0.0
+deriving instance (Eq (f a), Eq (g a)) => Eq (Sum f g a)
+-- | @since 4.18.0.0
+deriving instance (Ord (f a), Ord (g a)) => Ord (Sum f g a)
+-- | @since 4.18.0.0
+deriving instance (Read (f a), Read (g a)) => Read (Sum f g a)
+-- | @since 4.18.0.0
+deriving instance (Show (f a), Show (g a)) => Show (Sum f g a)
 
 -- | @since 4.9.0.0
 instance (Eq1 f, Eq1 g) => Eq1 (Sum f g) where
@@ -65,25 +75,12 @@ instance (Show1 f, Show1 g) => Show1 (Sum f g) where
         showsUnaryWith (liftShowsPrec sp sl) "InR" d y
 
 -- | @since 4.9.0.0
-instance (Eq1 f, Eq1 g, Eq a) => Eq (Sum f g a) where
-    (==) = eq1
--- | @since 4.9.0.0
-instance (Ord1 f, Ord1 g, Ord a) => Ord (Sum f g a) where
-    compare = compare1
--- | @since 4.9.0.0
-instance (Read1 f, Read1 g, Read a) => Read (Sum f g a) where
-    readPrec = readPrec1
-
-    readListPrec = readListPrecDefault
-    readList     = readListDefault
--- | @since 4.9.0.0
-instance (Show1 f, Show1 g, Show a) => Show (Sum f g a) where
-    showsPrec = showsPrec1
-
--- | @since 4.9.0.0
 instance (Functor f, Functor g) => Functor (Sum f g) where
     fmap f (InL x) = InL (fmap f x)
     fmap f (InR y) = InR (fmap f y)
+
+    a <$ (InL x) = InL (a <$ x)
+    a <$ (InR y) = InR (a <$ y)
 
 -- | @since 4.9.0.0
 instance (Foldable f, Foldable g) => Foldable (Sum f g) where

@@ -10,7 +10,6 @@
 #include "ghcconfig.h"
 #include "veh_excn.h"
 #include "LinkerInternals.h"
-#include <assert.h>
 #include <stdbool.h>
 #include <dbghelp.h>
 #include <shellapi.h>
@@ -57,7 +56,7 @@
   software exceptions Which means previously when we registered VEH handlers
   we would also trap software exceptions. Which means when haskell code was
   loaded in a C++ or C# context we would swallow exceptions and terminate in
-  contexes that normally the runtime should be able to continue on, e.g. you
+  contexts that normally the runtime should be able to continue on, e.g. you
   could be handling the segfault in your C++ code, or the div by 0.
 
   We could not handle these exceptions, but GHCi would just die a horrible death
@@ -66,7 +65,7 @@
   So instead, we'll move to Continue handler, to run as late as possible, and
   also register a filter which calls any existing filter, and then runs the
   continue handlers, we then also only run as the last continue handler so we
-  don't supercede any other VCH handlers.
+  don't supersede any other VCH handlers.
 
   Lastly we'll also provide a way for users to disable the exception handling
   entirely so even if the new approach doesn't solve the issue they can work
@@ -92,14 +91,9 @@
 // Registered exception handler
 PVOID __hs_handle = NULL;
 LPTOP_LEVEL_EXCEPTION_FILTER oldTopFilter = NULL;
-bool crash_dump = false;
-bool filter_called = false;
 
 long WINAPI __hs_exception_handler(struct _EXCEPTION_POINTERS *exception_data)
 {
-    if (!crash_dump && filter_called)
-      return EXCEPTION_CONTINUE_EXECUTION;
-
     long action   = EXCEPTION_CONTINUE_SEARCH;
     int exit_code = EXIT_FAILURE;
     ULONG_PTR what;
@@ -107,7 +101,9 @@ long WINAPI __hs_exception_handler(struct _EXCEPTION_POINTERS *exception_data)
 
     // When the system unwinds the VEH stack after having handled an excn,
     // return immediately.
-    if ((exception_data->ExceptionRecord->ExceptionFlags & EH_UNWINDING) == 0)
+    if (exception_data
+        && exception_data->ExceptionRecord
+        && (exception_data->ExceptionRecord->ExceptionFlags & EH_UNWINDING) ==0)
     {
         // Error handling cases covered by this implementation.
         switch (exception_data->ExceptionRecord->ExceptionCode) {
@@ -122,20 +118,31 @@ long WINAPI __hs_exception_handler(struct _EXCEPTION_POINTERS *exception_data)
                 action = EXCEPTION_CONTINUE_EXECUTION;
                 break;
             case EXCEPTION_ACCESS_VIOLATION:
-                what = exception_data->ExceptionRecord->ExceptionInformation[0];
-                fprintf(stderr, "Access violation in generated code"
-                                " when %s 0x%" PRIxPTR "\n"
-                                , what == 0 ? "reading"
-                                : what == 1 ? "writing"
-                                : what == 8 ? "executing data at"
-                                :             "?"
-                                , (uintptr_t) exception_data
-                                                ->ExceptionRecord
-                                                ->ExceptionInformation[1]
+              {
+                if (exception_data->ExceptionRecord->NumberParameters < 2)
+                  {
+                    fprintf(stderr, "Access violation in generated code. "
+                                    "Empty exception record.");
+                  }
+                else
+                  {
+                    what = exception_data->ExceptionRecord
+                                         ->ExceptionInformation[0];
+                    fprintf(stderr, "Access violation in generated code"
+                                    " when %s 0x%" PRIxPTR "\n"
+                                    , what == 0 ? "reading"
+                                    : what == 1 ? "writing"
+                                    : what == 8 ? "executing data at"
+                                    :             "?"
+                                    , (uintptr_t) exception_data
+                                                    ->ExceptionRecord
+                                                    ->ExceptionInformation[1]
                                 );
+                  }
                 action = EXCEPTION_CONTINUE_EXECUTION;
                 exit_code = SIGSEGV;
                 break;
+              }
             default:;
         }
 
@@ -145,6 +152,7 @@ long WINAPI __hs_exception_handler(struct _EXCEPTION_POINTERS *exception_data)
         if (EXCEPTION_CONTINUE_EXECUTION == action)
         {
             fflush(stderr);
+            hs_restoreConsoleCP ();
             generateStack (exception_data);
             generateDump (exception_data);
             stg_exit(exit_code);
@@ -154,19 +162,22 @@ long WINAPI __hs_exception_handler(struct _EXCEPTION_POINTERS *exception_data)
     return action;
 }
 
+/* Registered top level exception filter.  We're not very interested in handling
+   the error here, that's why we have __hs_exception_handler, but we do want
+   to register the fact that the filter was called.  This allows us to prevent
+   continuing to run when the exception was completely unhandled.
+   EXCEPTION_CONTINUE_EXECUTION is returned so that the OS gives the VEH
+   handlers a chance to run.  */
 long WINAPI __hs_exception_filter(struct _EXCEPTION_POINTERS *exception_data)
 {
-    filter_called = true;
     long result = EXCEPTION_CONTINUE_EXECUTION;
     if (oldTopFilter)
     {
         result = (*oldTopFilter)(exception_data);
         if (EXCEPTION_CONTINUE_SEARCH == result)
             result = EXCEPTION_CONTINUE_EXECUTION;
-        return result;
     }
 
-    crash_dump = true;
     return result;
 }
 
@@ -183,7 +194,7 @@ void __register_hs_exception_handler( void )
         __hs_handle = AddVectoredContinueHandler(CALL_LAST,
                                                  __hs_exception_handler);
         // should the handler not be registered this will return a null.
-        assert(__hs_handle);
+        CHECK(__hs_handle);
 
         // Register for an exception filter to ensure the continue handler gets
         // hit if no one handled the exception.

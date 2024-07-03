@@ -1,8 +1,4 @@
-#if __GLASGOW_HASKELL__ >= 709
-{-# LANGUAGE Safe #-}
-#else
-{-# LANGUAGE Trustworthy #-}
-#endif
+{-# LANGUAGE Safe, CApiFFI #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -22,6 +18,7 @@
 
 module System.Posix.Directory.Common (
        DirStream(..), CDir, CDirent, DirStreamOffset(..),
+       unsafeOpenDirStreamFd,
        rewindDirStream,
        closeDirStream,
 #ifdef HAVE_SEEKDIR
@@ -33,14 +30,53 @@ module System.Posix.Directory.Common (
        changeWorkingDirectoryFd,
   ) where
 
+import Control.Exception (mask_)
+import Control.Monad (void, when)
 import System.Posix.Types
-import Foreign
+import Foreign hiding (void)
 import Foreign.C
+
+#if !defined(HAVE_FCHDIR)
+import System.IO.Error ( ioeSetLocation )
+import GHC.IO.Exception ( unsupportedOperation )
+#endif
 
 newtype DirStream = DirStream (Ptr CDir)
 
 data {-# CTYPE "DIR" #-} CDir
 data {-# CTYPE "struct dirent" #-} CDirent
+
+-- | Call @fdopendir@ to obtain a directory stream for @fd@. @fd@ must not be
+-- otherwise used after this.
+--
+-- On success, it is owned by the returned 'DirStream', which should be closed
+-- via 'closeDirStream' when no longer needed.  On error, the file descriptor
+-- is automatically closed and then an exception is thrown.  There is no code
+-- path in which the file descriptor remains open and yet not owned by a
+-- returned 'DirStream'.
+--
+-- The input file descriptor must not have been used with @threadWaitRead@ or
+-- @threadWaitWrite@.
+unsafeOpenDirStreamFd :: Fd -> IO DirStream
+unsafeOpenDirStreamFd (Fd fd) = mask_ $ do
+    ptr <- c_fdopendir fd
+    when (ptr == nullPtr) $ do
+        errno <- getErrno
+        void $ c_close fd
+        ioError (errnoToIOError "openDirStreamFd" errno Nothing Nothing)
+    return $ DirStream ptr
+
+-- We need c_close here, because 'closeFd' throws exceptions on error,
+-- but we want to silently close the (presumably directory) descriptor.
+foreign import ccall unsafe "HsUnix.h close"
+   c_close :: CInt -> IO CInt
+
+-- NOTE: It is /critical/ to use "capi" and "dirent.h" here, because system
+-- headers on e.g. macOS alias this function, and linking directly to the
+-- "fdopendir" symbol in libc leads to a crash!
+--
+foreign import capi unsafe "dirent.h fdopendir"
+    c_fdopendir :: CInt -> IO (Ptr CDir)
 
 -- | @rewindDirStream dp@ calls @rewinddir@ to reposition
 --   the directory stream @dp@ at the beginning of the directory.
@@ -80,9 +116,19 @@ foreign import ccall unsafe "telldir"
   c_telldir :: Ptr CDir -> IO CLong
 #endif
 
+#if defined(HAVE_FCHDIR)
+
 changeWorkingDirectoryFd :: Fd -> IO ()
 changeWorkingDirectoryFd (Fd fd) =
   throwErrnoIfMinus1Retry_ "changeWorkingDirectoryFd" (c_fchdir fd)
 
 foreign import ccall unsafe "fchdir"
   c_fchdir :: CInt -> IO CInt
+
+#else
+
+{-# WARNING changeWorkingDirectoryFd "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_FCHDIR@)" #-}
+changeWorkingDirectoryFd :: Fd -> IO ()
+changeWorkingDirectoryFd _ = ioError (ioeSetLocation unsupportedOperation "changeWorkingDirectoryFd")
+
+#endif // HAVE_FCHDIR

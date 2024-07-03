@@ -53,6 +53,7 @@ import GHC.Base
 import GHC.List ((!!), foldr1, break)
 import GHC.Num
 import GHC.Stack.Types
+import GHC.Tuple (Solo (..))
 
 
 -- | The @shows@ functions return a function that prepends the
@@ -164,8 +165,14 @@ appPrec1 = I# 11#       -- appPrec + 1
 -- Simple Instances
 --------------------------------------------------------------
 
+-- | @since 4.8.0.0
+deriving instance Show Void
+
 -- | @since 2.01
 deriving instance Show ()
+
+-- | @since 4.15
+deriving instance Show a => Show (Solo a)
 
 -- | @since 2.01
 instance Show a => Show [a]  where
@@ -198,9 +205,11 @@ instance Show Word where
 showWord :: Word# -> ShowS
 showWord w# cs
  | isTrue# (w# `ltWord#` 10##) = C# (chr# (ord# '0'# +# word2Int# w#)) : cs
- | otherwise = case chr# (ord# '0'# +# word2Int# (w# `remWord#` 10##)) of
-               c# ->
-                   showWord (w# `quotWord#` 10##) (C# c# : cs)
+ | otherwise =
+    let
+      !(# q, r #) = quotRemWord# w# 10##
+      !c#         = chr# (ord# '0'# +# word2Int# r)
+    in showWord q (C# c# : cs)
 
 -- | @since 2.01
 deriving instance Show a => Show (Maybe a)
@@ -470,6 +479,7 @@ itos n# cs
 
 -- | @since 2.01
 instance Show Integer where
+    showsPrec p (IS i) r = showsPrec p (I# i) r
     showsPrec p n r
         | p > 6 && n < 0 = '(' : integerToString n (')' : r)
         -- Minor point: testing p first gives better code
@@ -480,10 +490,8 @@ instance Show Integer where
 
 -- | @since 4.8.0.0
 instance Show Natural where
-#if defined(MIN_VERSION_integer_gmp)
-    showsPrec p (NatS# w#) = showsPrec p (W# w#)
-#endif
-    showsPrec p i          = showsPrec p (naturalToInteger i)
+    showsPrec p (NS w) = showsPrec p (W# w)
+    showsPrec p n      = showsPrec p (integerFromNatural n)
 
 -- Divide and conquer implementation of string conversion
 integerToString :: Integer -> String -> String
@@ -508,7 +516,7 @@ integerToString n0 cs0
 
     jsplith :: Integer -> [Integer] -> [Integer]
     jsplith p (n:ns) =
-        case n `quotRemInteger` p of
+        case n `integerQuotRem#` p of
         (# q, r #) ->
             if q > 0 then q : r : jsplitb p ns
                      else     r : jsplitb p ns
@@ -516,7 +524,7 @@ integerToString n0 cs0
 
     jsplitb :: Integer -> [Integer] -> [Integer]
     jsplitb _ []     = []
-    jsplitb p (n:ns) = case n `quotRemInteger` p of
+    jsplitb p (n:ns) = case n `integerQuotRem#` p of
                        (# q, r #) ->
                            q : r : jsplitb p ns
 
@@ -525,7 +533,7 @@ integerToString n0 cs0
     -- that all fit into a machine word.
     jprinth :: [Integer] -> String -> String
     jprinth (n:ns) cs =
-        case n `quotRemInteger` BASE of
+        case n `integerQuotRem#` BASE of
         (# q', r' #) ->
             let q = fromInteger q'
                 r = fromInteger r'
@@ -535,7 +543,7 @@ integerToString n0 cs0
 
     jprintb :: [Integer] -> String -> String
     jprintb []     cs = cs
-    jprintb (n:ns) cs = case n `quotRemInteger` BASE of
+    jprintb (n:ns) cs = case n `integerQuotRem#` BASE of
                         (# q', r' #) ->
                             let q = fromInteger q'
                                 r = fromInteger r'
@@ -594,6 +602,9 @@ instance Show KindRep where
       . showsPrec 11 p
       . showString " "
       . showsPrec 11 q
+
+-- | @since 4.15.0.0
+deriving instance Show Levity
 
 -- | @since 4.11.0.0
 deriving instance Show RuntimeRep

@@ -5,9 +5,10 @@ Using runghc
 
 .. index::
    single: runghc
+   single: runhaskell
 
-``runghc`` allows you to run Haskell programs without first having to
-compile them.
+``runghc``/``runhaskell`` allows you to run Haskell programs using the interpreter, instead of having to
+compile them first.
 
 .. _runghc-introduction:
 

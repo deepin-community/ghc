@@ -3,13 +3,13 @@
  * (c) The GHC Team 1995-2002
  *
  * Support for concurrent non-blocking I/O and thread waiting in the
- * non-threaded RTS.  In the threded RTS, this file is not used at
+ * non-threaded RTS.  In the threaded RTS, this file is not used at
  * all, instead we use the IO manager thread implemented in Haskell in
  * the base package.
  *
  * ---------------------------------------------------------------------------*/
 
-#include "PosixSource.h"
+#include "rts/PosixSource.h"
 #include "Rts.h"
 
 #include "Signals.h"
@@ -19,15 +19,15 @@
 #include "RtsUtils.h"
 #include "Capability.h"
 #include "Select.h"
-#include "AwaitEvent.h"
+#include "IOManager.h"
 #include "Stats.h"
 #include "GetTime.h"
 
-# ifdef HAVE_SYS_SELECT_H
+# if defined(HAVE_SYS_SELECT_H)
 #  include <sys/select.h>
 # endif
 
-# ifdef HAVE_SYS_TYPES_H
+# if defined(HAVE_SYS_TYPES_H)
 #  include <sys/types.h>
 # endif
 
@@ -93,29 +93,29 @@ LowResTime getDelayTarget (HsInt us)
  * if this is true, then our time has expired.
  * (idea due to Andy Gill).
  */
-static bool wakeUpSleepingThreads (LowResTime now)
+static bool wakeUpSleepingThreads (Capability *cap, LowResTime now)
 {
+    CapIOManager *iomgr = cap->iomgr;
     StgTSO *tso;
     bool flag = false;
 
-    while (sleeping_queue != END_TSO_QUEUE) {
-        tso = sleeping_queue;
+    while (iomgr->sleeping_queue != END_TSO_QUEUE) {
+        tso = iomgr->sleeping_queue;
         if (((long)now - (long)tso->block_info.target) < 0) {
             break;
         }
-        sleeping_queue = tso->_link;
+        iomgr->sleeping_queue = tso->_link;
         tso->why_blocked = NotBlocked;
         tso->_link = END_TSO_QUEUE;
-        IF_DEBUG(scheduler, debugBelch("Waking up sleeping thread %lu\n",
-                                       (unsigned long)tso->id));
-        // MainCapability: this code is !THREADED_RTS
-        pushOnRunQueue(&MainCapability,tso);
+        IF_DEBUG(scheduler, debugBelch("Waking up sleeping thread %"
+                                       FMT_StgThreadID "\n", tso->id));
+        pushOnRunQueue(cap,tso);
         flag = true;
     }
     return flag;
 }
 
-static void GNUC3_ATTRIBUTE(__noreturn__)
+static void STG_NORETURN
 fdOutOfRange (int fd)
 {
     errorBelch("file descriptor %d out of range for select (0--%d).\n"
@@ -217,8 +217,9 @@ static enum FdState fdPollWriteState (int fd)
  *
  */
 void
-awaitEvent(bool wait)
+awaitEvent(Capability *cap, bool wait)
 {
+    CapIOManager *iomgr = cap->iomgr;
     StgTSO *tso, *prev, *next;
     fd_set rfd,wfd;
     int numFound;
@@ -243,7 +244,7 @@ awaitEvent(bool wait)
     do {
 
       now = getLowResTimeOfDay();
-      if (wakeUpSleepingThreads(now)) {
+      if (wakeUpSleepingThreads(cap, now)) {
           return;
       }
 
@@ -253,7 +254,9 @@ awaitEvent(bool wait)
       FD_ZERO(&rfd);
       FD_ZERO(&wfd);
 
-      for(tso = blocked_queue_hd; tso != END_TSO_QUEUE; tso = next) {
+      for(tso = iomgr->blocked_queue_hd;
+          tso != END_TSO_QUEUE;
+          tso = next) {
         next = tso->_link;
 
       /* On older FreeBSDs, FD_SETSIZE is unsigned. Cast it to signed int
@@ -298,7 +301,7 @@ awaitEvent(bool wait)
           tv.tv_sec  = 0;
           tv.tv_usec = 0;
           ptv = &tv;
-      } else if (sleeping_queue != END_TSO_QUEUE) {
+      } else if (iomgr->sleeping_queue != END_TSO_QUEUE) {
           /* SUSv2 allows implementations to have an implementation defined
            * maximum timeout for select(2). The standard requires
            * implementations to silently truncate values exceeding this maximum
@@ -317,7 +320,9 @@ awaitEvent(bool wait)
            */
           const time_t max_seconds = 2678400; // 31 * 24 * 60 * 60
 
-          Time min = LowResTimeToTime(sleeping_queue->block_info.target - now);
+          Time min = LowResTimeToTime(
+                       iomgr->sleeping_queue->block_info.target - now
+                     );
           tv.tv_sec  = TimeToSeconds(min);
           if (tv.tv_sec < max_seconds) {
               tv.tv_usec = TimeToUS(min) % 1000000;
@@ -350,25 +355,25 @@ awaitEvent(bool wait)
            */
 #if defined(RTS_USER_SIGNALS)
           if (RtsFlags.MiscFlags.install_signal_handlers && signals_pending()) {
-              startSignalHandlers(&MainCapability);
+              startSignalHandlers(cap);
               return; /* still hold the lock */
           }
 #endif
 
           /* we were interrupted, return to the scheduler immediately.
            */
-          if (sched_state >= SCHED_INTERRUPTING) {
+          if (getSchedState() >= SCHED_INTERRUPTING) {
               return; /* still hold the lock */
           }
 
           /* check for threads that need waking up
            */
-          wakeUpSleepingThreads(getLowResTimeOfDay());
+          wakeUpSleepingThreads(cap, getLowResTimeOfDay());
 
           /* If new runnable threads have arrived, stop waiting for
            * I/O and run them.
            */
-          if (!emptyRunQueue(&MainCapability)) {
+          if (!emptyRunQueue(cap)) {
               return; /* still hold the lock */
           }
       }
@@ -385,7 +390,9 @@ awaitEvent(bool wait)
            * traversed blocked TSOs. As a result you
            * can't use functions accessing 'blocked_queue_hd'.
            */
-          for(tso = blocked_queue_hd; tso != END_TSO_QUEUE; tso = next) {
+          for(tso = iomgr->blocked_queue_hd;
+              tso != END_TSO_QUEUE;
+              tso = next) {
               next = tso->_link;
               int fd;
               enum FdState fd_state = RTS_FD_IS_BLOCKING;
@@ -417,42 +424,43 @@ awaitEvent(bool wait)
               case RTS_FD_IS_INVALID:
                   /*
                    * Don't let RTS loop on such descriptors,
-                   * pass an IOError to blocked threads (Trac #4934)
+                   * pass an IOError to blocked threads (#4934)
                    */
                   IF_DEBUG(scheduler,
-                      debugBelch("Killing blocked thread %lu on bad fd=%i\n",
-                                 (unsigned long)tso->id, fd));
-                  raiseAsync(&MainCapability, tso,
+                      debugBelch("Killing blocked thread %" FMT_StgThreadID
+                                 " on bad fd=%i\n", tso->id, fd));
+                  raiseAsync(cap, tso,
                       (StgClosure *)blockedOnBadFD_closure, false, NULL);
                   break;
               case RTS_FD_IS_READY:
                   IF_DEBUG(scheduler,
-                      debugBelch("Waking up blocked thread %lu\n",
-                                 (unsigned long)tso->id));
+                      debugBelch("Waking up blocked thread %" FMT_StgThreadID "\n",
+                                 tso->id));
                   tso->why_blocked = NotBlocked;
                   tso->_link = END_TSO_QUEUE;
-                  pushOnRunQueue(&MainCapability,tso);
+                  pushOnRunQueue(cap,tso);
                   break;
               case RTS_FD_IS_BLOCKING:
                   if (prev == NULL)
-                      blocked_queue_hd = tso;
+                      iomgr->blocked_queue_hd = tso;
                   else
-                      setTSOLink(&MainCapability, prev, tso);
+                      setTSOLink(cap, prev, tso);
                   prev = tso;
                   break;
               }
           }
 
           if (prev == NULL)
-              blocked_queue_hd = blocked_queue_tl = END_TSO_QUEUE;
+              iomgr->blocked_queue_hd =
+                iomgr->blocked_queue_tl = END_TSO_QUEUE;
           else {
               prev->_link = END_TSO_QUEUE;
-              blocked_queue_tl = prev;
+              iomgr->blocked_queue_tl = prev;
           }
       }
 
-    } while (wait && sched_state == SCHED_RUNNING
-             && emptyRunQueue(&MainCapability));
+    } while (wait && getSchedState() == SCHED_RUNNING
+                  && emptyRunQueue(cap));
 }
 
 #endif /* THREADED_RTS */

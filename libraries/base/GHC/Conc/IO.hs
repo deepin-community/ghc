@@ -4,7 +4,6 @@
            , MagicHash
            , UnboxedTuples
   #-}
-{-# OPTIONS_GHC -Wno-missing-signatures #-}
 {-# OPTIONS_HADDOCK not-home #-}
 
 -----------------------------------------------------------------------------
@@ -29,6 +28,7 @@
 module GHC.Conc.IO
         ( ensureIOManagerIsRunning
         , ioManagerCapabilitiesChanged
+        , interruptIOManager
 
         -- * Waiting
         , threadDelay
@@ -61,22 +61,37 @@ import System.Posix.Types
 
 #if defined(mingw32_HOST_OS)
 import qualified GHC.Conc.Windows as Windows
+import GHC.IO.SubSystem
 import GHC.Conc.Windows (asyncRead, asyncWrite, asyncDoProc, asyncReadBA,
                          asyncWriteBA, ConsoleEvent(..), win32ConsoleHandler,
                          toWin32ConsoleEvent)
-#else
+#elif !defined(javascript_HOST_ARCH)
 import qualified GHC.Event.Thread as Event
 #endif
 
 ensureIOManagerIsRunning :: IO ()
-#if !defined(mingw32_HOST_OS)
+#if defined(javascript_HOST_ARCH)
+ensureIOManagerIsRunning = pure ()
+#elif !defined(mingw32_HOST_OS)
 ensureIOManagerIsRunning = Event.ensureIOManagerIsRunning
 #else
 ensureIOManagerIsRunning = Windows.ensureIOManagerIsRunning
 #endif
 
-ioManagerCapabilitiesChanged :: IO ()
+-- | Interrupts the current wait of the I/O manager if it is currently blocked.
+-- This instructs it to re-read how much it should wait and to process any
+-- pending events.
+--
+-- @since 4.15
+interruptIOManager :: IO ()
 #if !defined(mingw32_HOST_OS)
+interruptIOManager = return ()
+#else
+interruptIOManager = Windows.interruptIOManager
+#endif
+
+ioManagerCapabilitiesChanged :: IO ()
+#if !defined(mingw32_HOST_OS) && !defined(javascript_HOST_ARCH)
 ioManagerCapabilitiesChanged = Event.ioManagerCapabilitiesChanged
 #else
 ioManagerCapabilitiesChanged = return ()
@@ -90,7 +105,7 @@ ioManagerCapabilitiesChanged = return ()
 -- that has been used with 'threadWaitRead', use 'closeFdWith'.
 threadWaitRead :: Fd -> IO ()
 threadWaitRead fd
-#if !defined(mingw32_HOST_OS)
+#if !defined(mingw32_HOST_OS) && !defined(javascript_HOST_ARCH)
   | threaded  = Event.threadWaitRead fd
 #endif
   | otherwise = IO $ \s ->
@@ -106,7 +121,7 @@ threadWaitRead fd
 -- that has been used with 'threadWaitWrite', use 'closeFdWith'.
 threadWaitWrite :: Fd -> IO ()
 threadWaitWrite fd
-#if !defined(mingw32_HOST_OS)
+#if !defined(mingw32_HOST_OS) && !defined(javascript_HOST_ARCH)
   | threaded  = Event.threadWaitWrite fd
 #endif
   | otherwise = IO $ \s ->
@@ -120,7 +135,7 @@ threadWaitWrite fd
 -- in the file descriptor.
 threadWaitReadSTM :: Fd -> IO (Sync.STM (), IO ())
 threadWaitReadSTM fd
-#if !defined(mingw32_HOST_OS)
+#if !defined(mingw32_HOST_OS) && !defined(javascript_HOST_ARCH)
   | threaded  = Event.threadWaitReadSTM fd
 #endif
   | otherwise = do
@@ -139,7 +154,7 @@ threadWaitReadSTM fd
 -- in the file descriptor.
 threadWaitWriteSTM :: Fd -> IO (Sync.STM (), IO ())
 threadWaitWriteSTM fd
-#if !defined(mingw32_HOST_OS)
+#if !defined(mingw32_HOST_OS) && !defined(javascript_HOST_ARCH)
   | threaded  = Event.threadWaitWriteSTM fd
 #endif
   | otherwise = do
@@ -164,7 +179,7 @@ closeFdWith :: (Fd -> IO ()) -- ^ Low-level action that performs the real close.
             -> Fd            -- ^ File descriptor to close.
             -> IO ()
 closeFdWith close fd
-#if !defined(mingw32_HOST_OS)
+#if !defined(mingw32_HOST_OS) && !defined(javascript_HOST_ARCH)
   | threaded  = Event.closeFdWith close fd
 #endif
   | otherwise = close fd
@@ -176,14 +191,18 @@ closeFdWith close fd
 -- when the delay has expired, but the thread will never continue to
 -- run /earlier/ than specified.
 --
+-- Be careful not to exceed @maxBound :: Int@, which on 32-bit machines is only
+-- 2147483647 μs, less than 36 minutes.
+-- Consider using @Control.Concurrent.Thread.Delay.delay@ from @unbounded-delays@ package.
 threadDelay :: Int -> IO ()
 threadDelay time
 #if defined(mingw32_HOST_OS)
-  | threaded  = Windows.threadDelay time
-#else
+  | isWindowsNativeIO = Windows.threadDelay time
+  | threaded          = Windows.threadDelay time
+#elif !defined(javascript_HOST_ARCH)
   | threaded  = Event.threadDelay time
 #endif
-  | otherwise = IO $ \s ->
+  | otherwise         = IO $ \s ->
         case time of { I# time# ->
         case delay# time# s of { s' -> (# s', () #)
         }}
@@ -192,13 +211,19 @@ threadDelay time
 -- after a given number of microseconds. The caveats associated with
 -- 'threadDelay' also apply.
 --
+-- Be careful not to exceed @maxBound :: Int@, which on 32-bit machines is only
+-- 2147483647 μs, less than 36 minutes.
+--
 registerDelay :: Int -> IO (TVar Bool)
-registerDelay usecs
+registerDelay _usecs
 #if defined(mingw32_HOST_OS)
-  | threaded = Windows.registerDelay usecs
-#else
-  | threaded = Event.registerDelay usecs
+  | isWindowsNativeIO = Windows.registerDelay _usecs
+  | threaded          = Windows.registerDelay _usecs
+#elif !defined(javascript_HOST_ARCH)
+  | threaded          = Event.registerDelay _usecs
 #endif
-  | otherwise = errorWithoutStackTrace "registerDelay: requires -threaded"
+  | otherwise         = errorWithoutStackTrace "registerDelay: requires -threaded"
 
+#if !defined(javascript_HOST_ARCH)
 foreign import ccall unsafe "rtsSupportsBoundThreads" threaded :: Bool
+#endif

@@ -101,6 +101,10 @@ import Foreign.ForeignPtr
 import Foreign.Marshal
 import Foreign.Ptr
 import Foreign.Storable
+#if !defined(HAVE_SIGNAL_H) || !defined(HAVE_ALARM)
+import System.IO.Error ( ioeSetLocation )
+import GHC.IO.Exception ( unsupportedOperation )
+#endif
 import System.IO.Unsafe (unsafePerformIO)
 import System.Posix.Types
 import System.Posix.Internals
@@ -108,9 +112,23 @@ import System.Posix.Process
 import System.Posix.Process.Internals
 import Data.Dynamic
 
+#if defined(javascript_HOST_ARCH)
+-- These signals aren't supported by the JS RTS
+-- and the header isn't exposed.
+##define STG_SIG_DFL   (-1)
+##define STG_SIG_IGN   (-2)
+##define STG_SIG_ERR   (-3)
+##define STG_SIG_HAN   (-4)
+##define STG_SIG_RST   (-5)
+#else
 ##include "rts/Signals.h"
+#endif
 
 import GHC.Conc hiding (Signal)
+
+#if !defined(HAVE_SIGNAL_H)
+import Control.Exception ( throw )
+#endif
 
 -- -----------------------------------------------------------------------------
 -- Specific signals
@@ -118,148 +136,231 @@ import GHC.Conc hiding (Signal)
 nullSignal :: Signal
 nullSignal = 0
 
+-- | Process abort signal.
 sigABRT   :: CInt
 sigABRT   = CONST_SIGABRT
+
+-- | Alarm clock.
 sigALRM   :: CInt
 sigALRM   = CONST_SIGALRM
+
+-- | Access to an undefined portion of a memory object.
 sigBUS    :: CInt
 sigBUS    = CONST_SIGBUS
+
+-- | Child process terminated, stopped, or continued.
 sigCHLD   :: CInt
 sigCHLD   = CONST_SIGCHLD
+
+-- | Continue executing, if stopped.
 sigCONT   :: CInt
 sigCONT   = CONST_SIGCONT
+
+-- | Erroneous arithmetic operation.
 sigFPE    :: CInt
 sigFPE    = CONST_SIGFPE
+
+-- | Hangup.
 sigHUP    :: CInt
 sigHUP    = CONST_SIGHUP
+
+-- | Illegal instruction.
 sigILL    :: CInt
 sigILL    = CONST_SIGILL
+
+-- | Terminal interrupt signal.
 sigINT    :: CInt
 sigINT    = CONST_SIGINT
+
+-- | Kill (cannot be caught or ignored).
 sigKILL   :: CInt
 sigKILL   = CONST_SIGKILL
+
+-- | Write on a pipe with no one to read it.
 sigPIPE   :: CInt
 sigPIPE   = CONST_SIGPIPE
+
+-- | Terminal quit signal.
 sigQUIT   :: CInt
 sigQUIT   = CONST_SIGQUIT
+
+-- | Invalid memory reference.
 sigSEGV   :: CInt
 sigSEGV   = CONST_SIGSEGV
+
+-- | Stop executing (cannot be caught or ignored).
 sigSTOP   :: CInt
 sigSTOP   = CONST_SIGSTOP
+
+-- | Termination signal.
 sigTERM   :: CInt
 sigTERM   = CONST_SIGTERM
+
+-- | Terminal stop signal.
 sigTSTP   :: CInt
 sigTSTP   = CONST_SIGTSTP
+
+-- | Background process attempting read.
 sigTTIN   :: CInt
 sigTTIN   = CONST_SIGTTIN
+
+-- | Background process attempting write.
 sigTTOU   :: CInt
 sigTTOU   = CONST_SIGTTOU
+
+-- | User-defined signal 1.
 sigUSR1   :: CInt
 sigUSR1   = CONST_SIGUSR1
+
+-- | User-defined signal 2.
 sigUSR2   :: CInt
 sigUSR2   = CONST_SIGUSR2
+
 #if CONST_SIGPOLL != -1
+-- | Pollable event.
 sigPOLL   :: CInt
 sigPOLL   = CONST_SIGPOLL
 #endif
+
+-- | Profiling timer expired.
 sigPROF   :: CInt
 sigPROF   = CONST_SIGPROF
+
+-- | Bad system call.
 sigSYS    :: CInt
 sigSYS    = CONST_SIGSYS
+
+-- | Trace/breakpoint trap.
 sigTRAP   :: CInt
 sigTRAP   = CONST_SIGTRAP
+
+-- | High bandwidth data is available at a socket.
 sigURG    :: CInt
 sigURG    = CONST_SIGURG
+
+-- | Virtual timer expired.
 sigVTALRM :: CInt
 sigVTALRM = CONST_SIGVTALRM
+
+-- | CPU time limit exceeded.
 sigXCPU   :: CInt
 sigXCPU   = CONST_SIGXCPU
+
+-- | File size limit exceeded.
 sigXFSZ   :: CInt
 sigXFSZ   = CONST_SIGXFSZ
 
+-- | Alias for 'sigABRT'.
 internalAbort ::Signal
 internalAbort = sigABRT
 
+-- | Alias for 'sigALRM'.
 realTimeAlarm :: Signal
 realTimeAlarm = sigALRM
 
+-- | Alias for 'sigBUS'.
 busError :: Signal
 busError = sigBUS
 
+-- | Alias for 'sigCHLD'.
 processStatusChanged :: Signal
 processStatusChanged = sigCHLD
 
+-- | Alias for 'sigCONT'.
 continueProcess :: Signal
 continueProcess = sigCONT
 
+-- | Alias for 'sigFPE'.
 floatingPointException :: Signal
 floatingPointException = sigFPE
 
+-- | Alias for 'sigHUP'.
 lostConnection :: Signal
 lostConnection = sigHUP
 
+-- | Alias for 'sigILL'.
 illegalInstruction :: Signal
 illegalInstruction = sigILL
 
+-- | Alias for 'sigINT'.
 keyboardSignal :: Signal
 keyboardSignal = sigINT
 
+-- | Alias for 'sigKILL'.
 killProcess :: Signal
 killProcess = sigKILL
 
+-- | Alias for 'sigPIPE'.
 openEndedPipe :: Signal
 openEndedPipe = sigPIPE
 
+-- | Alias for 'sigQUIT'.
 keyboardTermination :: Signal
 keyboardTermination = sigQUIT
 
+-- | Alias for 'sigSEGV'.
 segmentationViolation :: Signal
 segmentationViolation = sigSEGV
 
+-- | Alias for 'sigSTOP'.
 softwareStop :: Signal
 softwareStop = sigSTOP
 
+-- | Alias for 'sigTERM'.
 softwareTermination :: Signal
 softwareTermination = sigTERM
 
+-- | Alias for 'sigTSTP'.
 keyboardStop :: Signal
 keyboardStop = sigTSTP
 
+-- | Alias for 'sigTTIN'.
 backgroundRead :: Signal
 backgroundRead = sigTTIN
 
+-- | Alias for 'sigTTOU'.
 backgroundWrite :: Signal
 backgroundWrite = sigTTOU
 
+-- | Alias for 'sigUSR1'.
 userDefinedSignal1 :: Signal
 userDefinedSignal1 = sigUSR1
 
+-- | Alias for 'sigUSR2'.
 userDefinedSignal2 :: Signal
 userDefinedSignal2 = sigUSR2
 
 #if CONST_SIGPOLL != -1
+-- | Alias for 'sigPOLL'.
 pollableEvent :: Signal
 pollableEvent = sigPOLL
 #endif
 
+-- | Alias for 'sigPROF'.
 profilingTimerExpired :: Signal
 profilingTimerExpired = sigPROF
 
+-- | Alias for 'sigSYS'.
 badSystemCall :: Signal
 badSystemCall = sigSYS
 
+-- | Alias for 'sigTRAP'.
 breakpointTrap :: Signal
 breakpointTrap = sigTRAP
 
+-- | Alias for 'sigURG'.
 urgentDataAvailable :: Signal
 urgentDataAvailable = sigURG
 
+-- | Alias for 'sigVTALRM'.
 virtualTimerExpired :: Signal
 virtualTimerExpired = sigVTALRM
 
+-- | Alias for 'sigXCPU'.
 cpuTimeLimitExceeded :: Signal
 cpuTimeLimitExceeded = sigXCPU
 
+-- | Alias for 'sigXFSZ'.
 fileSizeLimitExceeded :: Signal
 fileSizeLimitExceeded = sigXFSZ
 
@@ -269,25 +370,53 @@ fileSizeLimitExceeded = sigXFSZ
 -- | @signalProcess int pid@ calls @kill@ to signal process @pid@
 --   with interrupt signal @int@.
 signalProcess :: Signal -> ProcessID -> IO ()
+#if !defined(HAVE_SIGNAL_H)
+
+{-# WARNING signalProcess
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_SIGNAL_H@)" #-}
+signalProcess _ _ = ioError (ioeSetLocation unsupportedOperation "signalProcess")
+
+#else
+
 signalProcess sig pid
  = throwErrnoIfMinus1_ "signalProcess" (c_kill pid sig)
 
 foreign import ccall unsafe "kill"
   c_kill :: CPid -> CInt -> IO CInt
 
+#endif // HAVE_SIGNAL_H
+
 
 -- | @signalProcessGroup int pgid@ calls @kill@ to signal
 --  all processes in group @pgid@ with interrupt signal @int@.
 signalProcessGroup :: Signal -> ProcessGroupID -> IO ()
+#if !defined(HAVE_SIGNAL_H)
+
+{-# WARNING signalProcessGroup
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_SIGNAL_H@)" #-}
+signalProcessGroup _ _ = ioError (ioeSetLocation unsupportedOperation "signalProcessGroup")
+
+#else
+
 signalProcessGroup sig pgid
   = throwErrnoIfMinus1_ "signalProcessGroup" (c_killpg pgid sig)
 
 foreign import ccall unsafe "killpg"
   c_killpg :: CPid -> CInt -> IO CInt
 
+#endif // HAVE_SIGNAL_H
+
 -- | @raiseSignal int@ calls @kill@ to signal the current process
 --   with interrupt signal @int@.
 raiseSignal :: Signal -> IO ()
+#if !defined(HAVE_SIGNAL_H)
+
+{-# WARNING raiseSignal
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_SIGNAL_H@)" #-}
+raiseSignal _ = ioError (ioeSetLocation unsupportedOperation "raiseSignal")
+
+#else
+
 raiseSignal sig = throwErrnoIfMinus1_ "raiseSignal" (c_raise sig)
 
 -- See also note in GHC's rts/RtsUtils.c
@@ -301,15 +430,28 @@ foreign import ccall unsafe "raise"
   c_raise :: CInt -> IO CInt
 #endif
 
+#endif // HAVE_SIGNAL_H
 
 type Signal = CInt
 
 -- | The actions to perform when a signal is received.
 data Handler = Default
+                 -- ^ Sets the disposition of the signal to @SIG_DFL@, which
+                 -- means we want the default action associated with the
+                 -- signal. For example, the default action for @SIGTERM@ (and
+                 -- various other signals) is to terminate the process.
              | Ignore
+                 -- ^ Set the disposition of the signal to @SIG_IGN@, which
+                 -- means we want to /ignore/ the signal.  Ignored signals will
+                 -- not be delivered to the process, and if also /blocked/ will
+                 -- not be added to the pending set for later delivery (if/when
+                 -- unblocked).  Some signals (e.g. @SIGSTOP@ and @SIGKILL@)
+                 -- cannot be caught or ignored.
              -- not yet: | Hold
              | Catch (IO ())
+                 -- ^ signal handler is not reset
              | CatchOnce (IO ())
+                 -- ^ signal handler is automatically reset (via @SA_RESETHAND@)
              | CatchInfo (SignalInfo -> IO ())     -- ^ @since 2.7.0.0
              | CatchInfoOnce (SignalInfo -> IO ()) -- ^ @since 2.7.0.0
   deriving (Typeable)
@@ -350,8 +492,16 @@ installHandler :: Signal
                -> IO Handler            -- ^ old handler
 
 #ifdef __PARALLEL_HASKELL__
+{-# WARNING installHandler "installHandler: not available for Parallel Haskell"
+ - #-}
 installHandler =
   error "installHandler: not available for Parallel Haskell"
+#elif !defined(HAVE_SIGNAL_H)
+
+{-# WARNING installHandler
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_SIGNAL_H@)" #-}
+installHandler _ _ _ = ioError (ioeSetLocation unsupportedOperation "installHandler")
+
 #else
 
 installHandler sig handler _maybe_mask = do
@@ -383,14 +533,18 @@ installHandler sig handler _maybe_mask = do
             CatchOnce     action -> setHandler sig (Just (const action,dyn))
             CatchInfo     action -> setHandler sig (Just (getinfo action,dyn))
             CatchInfoOnce action -> setHandler sig (Just (getinfo action,dyn))
+#if __GLASGOW_HASKELL__ < 811
             _                    -> error "installHandler"
+#endif
 
         let action = case handler of
                 Catch _         -> STG_SIG_HAN
                 CatchOnce _     -> STG_SIG_RST
                 CatchInfo _     -> STG_SIG_HAN
                 CatchInfoOnce _ -> STG_SIG_RST
+#if __GLASGOW_HASKELL__ < 811
                 _               -> error "installHandler"
+#endif
 
         old_action <- stg_sig_install sig action nullPtr
                    -- mask is pointless, so leave it NULL
@@ -443,6 +597,15 @@ unmarshalSigInfo fp = do
 
 #endif /* !__PARALLEL_HASKELL__ */
 
+#if !defined(HAVE_ALARM)
+
+scheduleAlarm :: Int -> IO Int
+{-# WARNING scheduleAlarm
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_ALARM@)" #-}
+scheduleAlarm _ = ioError (ioeSetLocation unsupportedOperation "scheduleAlarm")
+
+#else
+
 -- -----------------------------------------------------------------------------
 -- Alarms
 
@@ -456,8 +619,22 @@ scheduleAlarm secs = do
 foreign import ccall unsafe "alarm"
   c_alarm :: CUInt -> IO CUInt
 
+#endif // HAVE_ALARM
+
 -- -----------------------------------------------------------------------------
 -- The NOCLDSTOP flag
+
+#if !defined(HAVE_SIGNAL_H)
+
+{-# WARNING setStoppedChildFlag "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_SIGNAL_H@)" #-}
+setStoppedChildFlag :: Bool -> IO Bool
+setStoppedChildFlag _ = ioError (ioeSetLocation unsupportedOperation "setStoppedChildFlag")
+
+{-# WARNING queryStoppedChildFlag "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_SIGNAL_H@)" #-}
+queryStoppedChildFlag :: IO Bool
+queryStoppedChildFlag = ioError (ioeSetLocation unsupportedOperation "queryStoppedChildFlag")
+
+#else
 
 foreign import ccall "&nocldstop" nocldstop :: Ptr Int
 
@@ -475,10 +652,55 @@ queryStoppedChildFlag = do
     rc <- peek nocldstop
     return (rc == (0::Int))
 
+#endif
+
 -- -----------------------------------------------------------------------------
 -- Manipulating signal sets
 
+#if defined(HAVE_SIGNAL_H)
+
 newtype SignalSet = SignalSet (ForeignPtr CSigset)
+
+#else
+
+data SignalSet
+
+#endif // HAVE_SIGNAL_H
+
+#if !defined(HAVE_SIGNAL_H)
+
+emptySignalSet :: SignalSet
+{-# WARNING emptySignalSet
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_SIGNAL_H@)" #-}
+emptySignalSet = throw (ioeSetLocation unsupportedOperation "emptySignalSet")
+
+fullSignalSet :: SignalSet
+{-# WARNING fullSignalSet
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_SIGNAL_H@)" #-}
+fullSignalSet = throw (ioeSetLocation unsupportedOperation "fullSignalSet")
+
+reservedSignals :: SignalSet
+{-# WARNING reservedSignals
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_SIGNAL_H@)" #-}
+reservedSignals = throw (ioeSetLocation unsupportedOperation "reservedSignals")
+
+infixr `addSignal`, `deleteSignal`
+addSignal :: Signal -> SignalSet -> SignalSet
+{-# WARNING addSignal
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_SIGNAL_H@)" #-}
+addSignal _ _ = throw (ioeSetLocation unsupportedOperation "addSignal")
+
+deleteSignal :: Signal -> SignalSet -> SignalSet
+{-# WARNING deleteSignal
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_SIGNAL_H@)" #-}
+deleteSignal _ _ = throw (ioeSetLocation unsupportedOperation "deleteSignal")
+
+inSignalSet :: Signal -> SignalSet -> Bool
+{-# WARNING inSignalSet
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_SIGNAL_H@)" #-}
+inSignalSet _ _ = throw (ioeSetLocation unsupportedOperation "inSignalSet")
+
+#else
 
 emptySignalSet :: SignalSet
 emptySignalSet = unsafePerformIO $ do
@@ -524,6 +746,32 @@ inSignalSet sig (SignalSet fp) = unsafePerformIO $
     r <- throwErrnoIfMinus1 "inSignalSet" (c_sigismember p sig)
     return (r /= 0)
 
+#endif // HAVE_SIGNAL_H
+
+#if !defined(HAVE_SIGNAL_H)
+
+getSignalMask :: IO SignalSet
+{-# WARNING getSignalMask
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_SIGNAL_H@)" #-}
+getSignalMask = ioError (ioeSetLocation unsupportedOperation "getSignalMask")
+
+setSignalMask :: SignalSet -> IO ()
+{-# WARNING setSignalMask
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_SIGNAL_H@)" #-}
+setSignalMask _ = ioError (ioeSetLocation unsupportedOperation "setSignalMask")
+
+blockSignals :: SignalSet -> IO ()
+{-# WARNING blockSignals
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_SIGNAL_H@)" #-}
+blockSignals _ = ioError (ioeSetLocation unsupportedOperation "blockSignals")
+
+unblockSignals :: SignalSet -> IO ()
+{-# WARNING unblockSignals
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_SIGNAL_H@)" #-}
+unblockSignals _ = ioError (ioeSetLocation unsupportedOperation "unblockSignals")
+
+#else
+
 -- | @getSignalMask@ calls @sigprocmask@ to determine the
 --   set of interrupts which are currently being blocked.
 getSignalMask :: IO SignalSet
@@ -554,6 +802,22 @@ blockSignals set = sigProcMask "blockSignals" (CONST_SIG_BLOCK :: CInt) set
 --   set of blocked interrupts.
 unblockSignals :: SignalSet -> IO ()
 unblockSignals set = sigProcMask "unblockSignals" (CONST_SIG_UNBLOCK :: CInt) set
+
+#endif // HAVE_SIGNAL_H
+
+#if !defined(HAVE_SIGNAL_H)
+
+getPendingSignals :: IO SignalSet
+{-# WARNING getPendingSignals
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_SIGNAL_H@)" #-}
+getPendingSignals = ioError (ioeSetLocation unsupportedOperation "getPendingSignals")
+
+awaitSignal :: Maybe SignalSet -> IO ()
+{-# WARNING awaitSignal
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_SIGNAL_H@)" #-}
+awaitSignal _ = ioError (ioeSetLocation unsupportedOperation "awaitSignal")
+
+#else
 
 -- | @getPendingSignals@ calls @sigpending@ to obtain
 --   the set of interrupts which have been received but are currently blocked.
@@ -590,21 +854,13 @@ awaitSignal maybe_sigset = do
   -- XXX My manpage says it can also return EFAULT. And why is ignoring
   -- EINTR the right thing to do?
 
+#endif // HAVE_SIGNAL_H
+
+#if defined(HAVE_SIGNAL_H)
+
 foreign import ccall unsafe "sigsuspend"
   c_sigsuspend :: Ptr CSigset -> IO CInt
 
-#if defined(darwin_HOST_OS) && __GLASGOW_HASKELL__ < 706
--- see http://ghc.haskell.org/trac/ghc/ticket/7359#comment:3
--- To be removed when support for GHC 7.4.x is dropped
-foreign import ccall unsafe "__hscore_sigdelset"
-  c_sigdelset   :: Ptr CSigset -> CInt -> IO CInt
-
-foreign import ccall unsafe "__hscore_sigfillset"
-  c_sigfillset  :: Ptr CSigset -> IO CInt
-
-foreign import ccall unsafe "__hscore_sigismember"
-  c_sigismember :: Ptr CSigset -> CInt -> IO CInt
-#else
 foreign import capi unsafe "signal.h sigdelset"
   c_sigdelset   :: Ptr CSigset -> CInt -> IO CInt
 
@@ -613,7 +869,8 @@ foreign import capi unsafe "signal.h sigfillset"
 
 foreign import capi unsafe "signal.h sigismember"
   c_sigismember :: Ptr CSigset -> CInt -> IO CInt
-#endif
 
 foreign import ccall unsafe "sigpending"
   c_sigpending :: Ptr CSigset -> IO CInt
+
+#endif // HAVE_SIGNAL_H

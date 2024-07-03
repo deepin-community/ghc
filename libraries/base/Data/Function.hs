@@ -1,5 +1,7 @@
 {-# LANGUAGE Trustworthy #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# OPTIONS_HADDOCK print-explicit-runtime-reps #-}
+  -- Show the levity-polymorphic signature of '$'
 
 -----------------------------------------------------------------------------
 -- |
@@ -9,7 +11,7 @@
 -- License     :  BSD-style (see the LICENSE file in the distribution)
 --
 -- Maintainer  :  libraries@haskell.org
--- Stability   :  experimental
+-- Stability   :  stable
 -- Portability :  portable
 --
 -- Simple combinators working solely on and with functions.
@@ -23,9 +25,11 @@ module Data.Function
   , (&)
   , fix
   , on
+  , applyWhen
   ) where
 
 import GHC.Base ( ($), (.), id, const, flip )
+import Data.Bool ( Bool(..) )
 
 infixl 0 `on`
 infixl 1 &
@@ -45,7 +49,7 @@ infixl 1 &
 -- 120
 --
 -- Instead of making a recursive call, we introduce a dummy parameter @rec@;
--- when used within 'fix', this parameter then refers to 'fix' argument, hence
+-- when used within 'fix', this parameter then refers to 'fix'’s argument, hence
 -- the recursion is reintroduced.
 fix :: (a -> a) -> a
 fix f = let x = f x in x
@@ -118,6 +122,33 @@ on :: (b -> b -> c) -> (a -> b) -> a -> a -> c
 -- @since 4.8.0.0
 (&) :: a -> (a -> b) -> b
 x & f = f x
+
+-- | 'applyWhen' applies a function to a value if a condition is true,
+-- otherwise, it returns the value unchanged.
+--
+-- It is equivalent to @'flip' ('Data.Bool.bool' 'id')@.
+--
+-- Algebraic properties:
+--
+-- * @applyWhen 'True' = 'id'@
+--
+-- * @applyWhen 'False' f = 'id'@
+--
+-- @since 4.18.0.0
+applyWhen :: Bool -> (a -> a) -> a -> a
+applyWhen True  f x = f x
+applyWhen False _ x = x
+-- Proofs:
+--
+-- flip bool id = \q f -> bool id f q
+-- = \q f -> case q of
+--     True -> f = \x -> f x
+--     False -> id = \x -> x ∎
+--
+-- applyWhen True = \f x -> f x
+-- = \f -> \x -> f x = \f -> f = id ∎
+--
+-- applyWhen False f = \x -> x = id ∎
 
 -- $setup
 -- >>> import Prelude

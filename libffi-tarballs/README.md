@@ -1,7 +1,10 @@
-# libffi snapshot tarball for GHC
+# libffi tarballs for GHC
 
-This source snapshot was produced from
-[libffi](https://github.com/libffi/libffi) commit
-[77e130c](https://github.com/libffi/libffi/commit/77e130c) for GHC. See the
-`master` branch of this repository for more information about the rationale
-and tools for producing these snapshots.
+This repository contains the official source tarballs used to build
+[libffi](https://github.com/libffi/libffi) for
+[GHC](https://ghc.haskell.org/).
+
+In order to update the `libffi` version built by GHC, first land a
+merge request to
+[`libffi-tarballs`](https://gitlab.haskell.org/ghc/libffi-tarballs),
+then update the submodule commit in the `ghc` repository.

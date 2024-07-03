@@ -1,8 +1,6 @@
-#if __GLASGOW_HASKELL__ >= 709
 {-# LANGUAGE Safe #-}
-#else
-{-# LANGUAGE Trustworthy #-}
-#endif
+{-# LANGUAGE CApiFFI #-}
+{-# LANGUAGE InterruptibleFFI #-}
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  System.Posix.Semaphore
@@ -19,22 +17,35 @@
 
 module System.Posix.Semaphore
     (OpenSemFlags(..), Semaphore(),
-     semOpen, semUnlink, semWait, semTryWait, semThreadWait,
+     semOpen, semUnlink, semWait, semWaitInterruptible, semTryWait, semThreadWait,
      semPost, semGetValue)
     where
 
+#include "HsUnix.h"
 #include <semaphore.h>
 #include <fcntl.h>
 
 import Foreign.C
 import Foreign.ForeignPtr hiding (newForeignPtr)
 import Foreign.Concurrent
-import Foreign.Marshal
 import Foreign.Ptr
-import Foreign.Storable
 import System.Posix.Types
 import Control.Concurrent
 import Data.Bits
+#if !defined(HAVE_SEM_GETVALUE)
+import System.IO.Error ( ioeSetLocation )
+import GHC.IO.Exception ( unsupportedOperation )
+#else
+import Foreign.Marshal
+import Foreign.Storable
+#endif
+
+#if __GLASGOW_HASKELL__ >= 902
+import System.Posix.Internals (hostIsThreaded)
+#else
+hostIsThreaded :: Bool
+hostIsThreaded = False
+#endif
 
 data OpenSemFlags = OpenSemFlags { semCreate :: Bool,
                                    -- ^ If true, create the semaphore if it
@@ -76,6 +87,20 @@ semWait (Semaphore fptr) = withForeignPtr fptr semWait'
     where semWait' sem = throwErrnoIfMinus1Retry_ "semWait" $
                          sem_wait sem
 
+-- | Lock the semaphore, blocking until it becomes available.
+--
+-- Unlike 'semWait', this wait operation can be interrupted with
+-- an asynchronous exception (e.g. a call to 'throwTo' from another thread).
+semWaitInterruptible :: Semaphore -> IO Bool
+semWaitInterruptible (Semaphore fptr) = withForeignPtr fptr semWait'
+    where semWait' sem =
+            do res <- sem_wait_interruptible sem
+               if res == 0 then return True
+                           else do errno <- getErrno
+                                   if errno == eINTR
+                                     then return False
+                                     else throwErrno "semWaitInterrruptible"
+
 -- | Attempt to lock the semaphore without blocking.  Immediately return
 --   False if it is not available.
 semTryWait :: Semaphore -> IO Bool
@@ -93,9 +118,15 @@ semTryWait (Semaphore fptr) = withForeignPtr fptr semTrywait'
 --   semWait, this will block only the current thread rather than the
 --   entire process.
 semThreadWait :: Semaphore -> IO ()
-semThreadWait sem = do res <- semTryWait sem
-                       (if res then return ()
-                        else ( do { yield; semThreadWait sem } ))
+semThreadWait sem
+  -- N.B. semWait can be safely used in the case of the threaded runtime, where
+  -- the safe foreign call will be performed in its own thread, thereby not
+  -- blocking the process.
+  | hostIsThreaded = semWait sem
+  | otherwise = do
+      res <- semTryWait sem
+      if res then return ()
+             else do yield >> semThreadWait sem
 
 -- | Unlock the semaphore.
 semPost :: Semaphore -> IO ()
@@ -105,8 +136,10 @@ semPost (Semaphore fptr) = withForeignPtr fptr semPost'
 
 -- | Return the semaphore's current value.
 semGetValue :: Semaphore -> IO Int
+#ifdef HAVE_SEM_GETVALUE
 semGetValue (Semaphore fptr) = withForeignPtr fptr semGetValue'
     where semGetValue' sem = alloca (semGetValue_ sem)
+
 
 semGetValue_ :: Ptr () -> Ptr CInt -> IO Int
 semGetValue_ sem ptr = do throwErrnoIfMinus1Retry_ "semGetValue" $
@@ -114,18 +147,24 @@ semGetValue_ sem ptr = do throwErrnoIfMinus1Retry_ "semGetValue" $
                           cint <- peek ptr
                           return $ fromEnum cint
 
-foreign import ccall safe "sem_open"
-        sem_open :: CString -> CInt -> CMode -> CUInt -> IO (Ptr ())
-foreign import ccall safe "sem_close"
-        sem_close :: Ptr () -> IO CInt
-foreign import ccall safe "sem_unlink"
-        sem_unlink :: CString -> IO CInt
-
-foreign import ccall safe "sem_wait"
-        sem_wait :: Ptr () -> IO CInt
-foreign import ccall safe "sem_trywait"
-        sem_trywait :: Ptr () -> IO CInt
-foreign import ccall safe "sem_post"
-        sem_post :: Ptr () -> IO CInt
-foreign import ccall safe "sem_getvalue"
+foreign import capi safe "semaphore.h sem_getvalue"
         sem_getvalue :: Ptr () -> Ptr CInt -> IO Int
+#else
+{-# WARNING semGetValue "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_SEM_GETVALUE@)" #-}
+semGetValue _ = ioError (ioeSetLocation unsupportedOperation "semGetValue")
+#endif
+
+foreign import capi safe "semaphore.h sem_open"
+        sem_open :: CString -> CInt -> CMode -> CUInt -> IO (Ptr ())
+foreign import capi safe "semaphore.h sem_close"
+        sem_close :: Ptr () -> IO CInt
+foreign import capi safe "semaphore.h sem_unlink"
+        sem_unlink :: CString -> IO CInt
+foreign import capi safe "semaphore.h sem_wait"
+        sem_wait :: Ptr () -> IO CInt
+foreign import capi interruptible "semaphore.h sem_wait"
+        sem_wait_interruptible :: Ptr () -> IO CInt
+foreign import capi safe "semaphore.h sem_trywait"
+        sem_trywait :: Ptr () -> IO CInt
+foreign import capi safe "semaphore.h sem_post"
+        sem_post :: Ptr () -> IO CInt

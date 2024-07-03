@@ -1,9 +1,11 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE Trustworthy #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -12,7 +14,7 @@
 -- License     :  BSD-style (see the file libraries/base/LICENSE)
 --
 -- Maintainer  :  libraries@haskell.org
--- Stability   :  experimental
+-- Stability   :  stable
 -- Portability :  portable
 --
 -- The @String@ type and associated operations.
@@ -35,8 +37,26 @@ import Data.Functor.Const (Const (Const))
 import Data.Functor.Identity (Identity (Identity))
 import Data.List (lines, words, unlines, unwords)
 
--- | Class for string-like datastructures; used by the overloaded string
---   extension (-XOverloadedStrings in GHC).
+-- | `IsString` is used in combination with the @-XOverloadedStrings@
+-- language extension to convert the literals to different string types.
+--
+-- For example, if you use the [text](https://hackage.haskell.org/package/text) package,
+-- you can say
+--
+-- @
+-- {-# LANGUAGE OverloadedStrings  #-}
+--
+-- myText = "hello world" :: Text
+-- @
+--
+-- Internally, the extension will convert this to the equivalent of
+--
+-- @
+-- myText = fromString @Text ("hello world" :: String)
+-- @
+--
+-- __Note:__ You can use @fromString@ in normal code as well,
+-- but the usual performance/memory efficiency problems with 'String' apply.
 class IsString a where
     fromString :: String -> a
 
@@ -87,7 +107,7 @@ instance (a ~ Char) => IsString [a] where
     fromString xs = xs
 
 -- | @since 4.9.0.0
-deriving instance IsString a => IsString (Const a b)
+deriving instance IsString a => IsString (Const a (b :: k))
 
 -- | @since 4.9.0.0
 deriving instance IsString a => IsString (Identity a)

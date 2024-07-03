@@ -1,8 +1,9 @@
 {-# LANGUAGE CPP #-}
 #if __GLASGOW_HASKELL__ >= 702
 {-# LANGUAGE Safe #-}
+{-# LANGUAGE DeriveGeneric #-}
 #endif
-#if __GLASGOW_HASKELL__ >= 710
+#if __GLASGOW_HASKELL__ >= 710 && __GLASGOW_HASKELL__ < 802
 {-# LANGUAGE AutoDeriveTypeable #-}
 #endif
 -----------------------------------------------------------------------------
@@ -17,13 +18,15 @@
 -- Stability   :  experimental
 -- Portability :  portable
 --
--- A monad transformer that combines 'ReaderT', 'WriterT' and 'StateT'.
+-- A monad transformer that combines 'Control.Monad.Trans.Reader.ReaderT',
+-- 'Control.Monad.Trans.Writer.CPS.WriterT' and
+-- 'Control.Monad.Trans.State.Strict.StateT'.
 -- This version uses continuation-passing-style for the writer part
 -- to achieve constant space usage.
 -- For a lazy version with the same interface,
 -- see "Control.Monad.Trans.RWS.Lazy".
 -----------------------------------------------------------------------------
-  
+
 module Control.Monad.Trans.RWS.CPS (
     -- * The RWS monad
     RWS,
@@ -79,6 +82,9 @@ import Data.Monoid
 
 #if MIN_VERSION_base(4,9,0)
 import qualified Control.Monad.Fail as Fail
+#endif
+#if __GLASGOW_HASKELL__ >= 704
+import GHC.Generics
 #endif
 
 -- | A monad containing an environment of type @r@, output of type @w@
@@ -143,6 +149,9 @@ withRWS = withRWST
 -- collecting an output of type @w@ and updating a state of type @s@
 -- to an inner monad @m@.
 newtype RWST r w s m a = RWST { unRWST :: r -> s -> w -> m (a, s, w) }
+#if __GLASGOW_HASKELL__ >= 704
+    deriving (Generic)
+#endif
 
 -- | Construct an RWST computation from a function.
 -- (The inverse of 'runRWST'.)

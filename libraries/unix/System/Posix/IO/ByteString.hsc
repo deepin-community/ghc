@@ -1,8 +1,4 @@
-#if __GLASGOW_HASKELL__ >= 709
-{-# LANGUAGE Safe #-}
-#else
 {-# LANGUAGE Trustworthy #-}
-#endif
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  System.Posix.IO.ByteString
@@ -31,7 +27,7 @@ module System.Posix.IO.ByteString (
     -- ** Opening and closing files
     OpenMode(..),
     OpenFileFlags(..), defaultFileFlags,
-    openFd, createFile,
+    openFd, openFdAt, createFile, createFileAt,
     closeFd,
 
     -- ** Reading\/writing data
@@ -67,6 +63,16 @@ module System.Posix.IO.ByteString (
 
   ) where
 
+import Data.ByteString ( ByteString, empty )
+import qualified Data.ByteString.Internal as BI
+import qualified Data.ByteString.Unsafe as BU
+
+import Foreign ( castPtr )
+
+import GHC.IO.Exception ( IOErrorType(EOF) )
+
+import System.IO.Error ( ioeSetErrorString, mkIOError )
+
 import System.Posix.Types
 import System.Posix.IO.Common
 
@@ -76,18 +82,62 @@ import System.Posix.ByteString.FilePath
 -- for information on how to use the 'FileMode' type.
 openFd :: RawFilePath
        -> OpenMode
-       -> Maybe FileMode -- ^Just x => creates the file with the given modes, Nothing => the file must exist.
        -> OpenFileFlags
        -> IO Fd
-openFd name how maybe_mode flags = do
-   withFilePath name $ \str -> do
-     throwErrnoPathIfMinus1Retry "openFd" name $
-       open_ str how maybe_mode flags
+openFd = openFdAt Nothing
+
+-- | Open a file relative to an optional directory file descriptor.
+--
+-- Directory file descriptors can be used to avoid some race conditions when
+-- navigating changing directory trees, or to retain access to a portion of the
+-- directory tree that would otherwise become inaccessible after dropping
+-- privileges.
+openFdAt :: Maybe Fd -- ^ Optional directory file descriptor
+         -> RawFilePath -- ^ Pathname to open
+         -> OpenMode -- ^ Read-only, read-write or write-only
+         -> OpenFileFlags -- ^ Append, exclusive, truncate, etc.
+         -> IO Fd
+openFdAt fdMay name how flags =
+  withFilePath name $ \str ->
+    throwErrnoPathIfMinus1Retry "openFdAt" name $
+      openat_ fdMay str how flags
 
 -- |Create and open this file in WriteOnly mode.  A special case of
 -- 'openFd'.  See 'System.Posix.Files' for information on how to use
 -- the 'FileMode' type.
-
 createFile :: RawFilePath -> FileMode -> IO Fd
-createFile name mode
-  = openFd name WriteOnly (Just mode) defaultFileFlags{ trunc=True }
+createFile = createFileAt Nothing
+
+-- | Create and open a file for write-only, with default flags,
+-- relative an optional directory file-descriptor.
+--
+-- Directory file descriptors can be used to avoid some race conditions when
+-- navigating changing directory trees, or to retain access to a portion of the
+-- directory tree that would otherwise become inaccessible after dropping
+-- privileges.
+createFileAt :: Maybe Fd -- ^ Optional directory file descriptor
+             -> RawFilePath -- ^ Pathname to create
+             -> FileMode -- ^ File permission bits (before umask)
+             -> IO Fd
+createFileAt fdMay name mode
+  = openFdAt fdMay name WriteOnly defaultFileFlags{ trunc=True, creat=(Just mode) }
+
+-- | Read data from an 'Fd' and return it as a 'ByteString'.
+-- Throws an exception if this is an invalid descriptor, or EOF has been
+-- reached.
+fdRead :: Fd
+       -> ByteCount -- ^How many bytes to read
+       -> IO ByteString -- ^The bytes read
+fdRead _fd 0 = return empty
+fdRead fd nbytes =
+  BI.createUptoN (fromIntegral nbytes) $ \ buf -> do
+  rc <- fdReadBuf fd buf nbytes
+  case rc of
+    0 -> ioError (ioeSetErrorString (mkIOError EOF "fdRead" Nothing Nothing) "EOF")
+    n -> return (fromIntegral n)
+
+-- | Write a 'ByteString' to an 'Fd'.
+fdWrite :: Fd -> ByteString -> IO ByteCount
+fdWrite fd bs =
+  BU.unsafeUseAsCStringLen bs $ \ (buf,len) ->
+    fdWriteBuf fd (castPtr buf) (fromIntegral len)

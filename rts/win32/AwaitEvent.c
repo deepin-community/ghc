@@ -14,32 +14,38 @@
  *
  */
 #include "Rts.h"
+#include "RtsFlags.h"
 #include "Schedule.h"
-#include "AwaitEvent.h"
+#include "IOManager.h"
 #include <windows.h>
-#include "win32/AsyncIO.h"
+#include "win32/AsyncMIO.h"
+#include "win32/AsyncWinIO.h"
 #include "win32/ConsoleHandler.h"
+#include <stdbool.h>
 
 // Used to avoid calling abandonRequestWait() if we don't need to.
 // Protected by sched_mutex.
-static uint32_t workerWaitingForRequests = 0;
+static bool workerWaitingForRequests = false;
 
 void
-awaitEvent(bool wait)
+awaitEvent(Capability *cap, bool wait)
 {
   do {
     /* Try to de-queue completed IO requests
      */
-    workerWaitingForRequests = 1;
-    awaitRequests(wait);
-    workerWaitingForRequests = 0;
+    workerWaitingForRequests = true;
+    if (is_io_mng_native_p())
+      awaitAsyncRequests(wait);
+    else
+      awaitRequests(wait);
+    workerWaitingForRequests = false;
 
     // If a signal was raised, we need to service it
     // XXX the scheduler loop really should be calling
     // startSignalHandlers(), but this is the way that posix/Select.c
     // does it and I'm feeling too paranoid to refactor it today --SDM
     if (stg_pending_events != 0) {
-        startSignalHandlers(&MainCapability);
+        startSignalHandlers(cap);
         return;
     }
 
@@ -50,8 +56,8 @@ awaitEvent(bool wait)
     //  - the run-queue is now non- empty
 
   } while (wait
-           && sched_state == SCHED_RUNNING
-           && emptyRunQueue(&MainCapability)
+           && getSchedState() == SCHED_RUNNING
+           && emptyRunQueue(cap)
       );
 }
 #endif

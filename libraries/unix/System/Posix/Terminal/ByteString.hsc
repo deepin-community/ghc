@@ -1,9 +1,5 @@
 {-# LANGUAGE CApiFFI #-}
-#if __GLASGOW_HASKELL__ >= 709
 {-# LANGUAGE Safe #-}
-#else
-{-# LANGUAGE Trustworthy #-}
-#endif
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  System.Posix.Terminal.ByteString
@@ -92,7 +88,7 @@ import Foreign.C hiding (
 
 import System.Posix.ByteString.FilePath
 
-#if !HAVE_CTERMID
+#if !(HAVE_CTERMID && defined(HAVE_TERMIOS_H))
 import System.IO.Error ( ioeSetLocation )
 import GHC.IO.Exception ( unsupportedOperation )
 #endif
@@ -119,7 +115,7 @@ foreign import ccall unsafe "ttyname"
 -- provide @ctermid(3)@ (use @#if HAVE_CTERMID@ CPP guard to
 -- detect availability).
 getControllingTerminalName :: IO RawFilePath
-#if HAVE_CTERMID
+#if HAVE_CTERMID && defined(HAVE_TERMIOS_H)
 getControllingTerminalName = do
   s <- throwErrnoIfNull "getControllingTerminalName" (c_ctermid nullPtr)
   peekFilePath s
@@ -142,15 +138,10 @@ getSlaveTerminalName (Fd fd) = do
   s <- throwErrnoIfNull "getSlaveTerminalName" (c_ptsname fd)
   peekFilePath s
 
-# if __GLASGOW_HASKELL__ < 800
--- see comment in cbits/HsUnix.c
-foreign import ccall unsafe "__hsunix_ptsname"
-  c_ptsname :: CInt -> IO CString
-# else
 foreign import capi unsafe "HsUnix.h ptsname"
   c_ptsname :: CInt -> IO CString
-# endif
 #else
+{-# WARNING getSlaveTerminalName "getSlaveTerminalName: not available on this platform" #-}
 getSlaveTerminalName _ =
     ioError (errnoToIOError "getSlaveTerminalName" eNOSYS Nothing Nothing)
 #endif
@@ -178,12 +169,12 @@ foreign import ccall unsafe "openpty"
             -> IO CInt
 #else
 openPseudoTerminal = do
-  (Fd master) <- openFd (B.pack "/dev/ptmx") ReadWrite Nothing
+  (Fd master) <- openFd (B.pack "/dev/ptmx") ReadWrite
                         defaultFileFlags{noctty=True}
   throwErrnoIfMinus1_ "openPseudoTerminal" (c_grantpt master)
   throwErrnoIfMinus1_ "openPseudoTerminal" (c_unlockpt master)
   slaveName <- getSlaveTerminalName (Fd master)
-  slave <- openFd slaveName ReadWrite Nothing defaultFileFlags{noctty=True}
+  slave <- openFd slaveName ReadWrite defaultFileFlags{noctty=True}
   pushModule slave "ptem"
   pushModule slave "ldterm"
 # ifndef __hpux
@@ -202,20 +193,11 @@ foreign import ccall unsafe "__hsunix_push_module"
   c_push_module :: CInt -> CString -> IO CInt
 
 #if HAVE_PTSNAME
-# if __GLASGOW_HASKELL__ < 800
--- see comment in cbits/HsUnix.c
-foreign import ccall unsafe "__hsunix_grantpt"
-  c_grantpt :: CInt -> IO CInt
-
-foreign import ccall unsafe "__hsunix_unlockpt"
-  c_unlockpt :: CInt -> IO CInt
-# else
 foreign import capi unsafe "HsUnix.h grantpt"
   c_grantpt :: CInt -> IO CInt
 
 foreign import capi unsafe "HsUnix.h unlockpt"
   c_unlockpt :: CInt -> IO CInt
-# endif
 #else
 c_grantpt :: CInt -> IO CInt
 c_grantpt _ = return (fromIntegral (0::Int))

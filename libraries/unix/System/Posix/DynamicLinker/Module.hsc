@@ -1,8 +1,4 @@
-#if __GLASGOW_HASKELL__ >= 709
 {-# LANGUAGE Safe #-}
-#else
-{-# LANGUAGE Trustworthy #-}
-#endif
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  System.Posix.DynamicLinker.Module
@@ -60,6 +56,7 @@ where
 
 #include "HsUnix.h"
 
+import Prelude hiding (head, tail)
 import System.Posix.DynamicLinker
 import System.Posix.DynamicLinker.Common
 import Foreign.Ptr      ( Ptr, nullPtr, FunPtr )
@@ -105,9 +102,10 @@ withModule :: Maybe String
 withModule mdir file flags p = do
   let modPath = case mdir of
                   Nothing -> file
-                  Just dir  -> dir ++ if ((head (reverse dir)) == '/')
-                                       then file
-                                       else ('/':file)
+                  Just dir  -> dir ++ case unsnoc dir of
+                    Just (_, '/') -> file
+                    Just{}        -> '/' : file
+                    Nothing       -> error "System.Posix.DynamicLinker.Module.withModule: directory should not be Just \"\", pass Nothing instead"
   modu <- moduleOpen modPath flags
   result <- p modu
   moduleClose modu
@@ -119,3 +117,10 @@ withModule_ :: Maybe String
             -> (Module -> IO a)
             -> IO ()
 withModule_ dir file flags p = withModule dir file flags p >>= \ _ -> return ()
+
+-- Dual to 'Data.List.uncons'.
+unsnoc :: [a] -> Maybe ([a], a)
+unsnoc = foldr go Nothing
+  where
+    go x Nothing = Just ([], x)
+    go x (Just (xs, lst)) = Just (x : xs, lst)

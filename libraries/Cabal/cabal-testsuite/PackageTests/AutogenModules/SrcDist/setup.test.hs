@@ -25,16 +25,16 @@ main = setupAndCabalTest $ do
         let gotTestSuite  = head $ testSuites  (localPkgDescr lbi)
         let gotBenchmark  = head $ benchmarks  (localPkgDescr lbi)
         assertEqual "library 'autogen-modules' field does not match expected"
-                [fromString "MyLibHelperModule"]
+                [fromString "PackageInfo_AutogenModules", fromString "Paths_AutogenModules", fromString "MyLibHelperModule"]
                 (libModulesAutogen gotLibrary)
         assertEqual "executable 'autogen-modules' field does not match expected"
-                [fromString "MyExeHelperModule"]
+                [fromString "PackageInfo_AutogenModules", fromString "Paths_AutogenModules", fromString "MyExeHelperModule"]
                 (exeModulesAutogen gotExecutable)
         assertEqual "test-suite 'autogen-modules' field does not match expected"
-                [fromString "MyTestHelperModule"]
+                [fromString "PackageInfo_AutogenModules", fromString "Paths_AutogenModules", fromString "MyTestHelperModule"]
                 (testModulesAutogen gotTestSuite)
         assertEqual "benchmark 'autogen-modules' field does not match expected"
-                [fromString "MyBenchHelperModule"]
+                [fromString "PackageInfo_AutogenModules", fromString "Paths_AutogenModules", fromString "MyBenchHelperModule"]
                 (benchmarkModulesAutogen gotBenchmark)
 
         -- Package check messages.
@@ -61,7 +61,6 @@ main = setupAndCabalTest $ do
         assertOutputDoesNotContain pathsAutogenMsg configureResult
 
         -- Asserts for the undesired check messages after sdist.
-        assertOutputDoesNotContain "Distribution quality errors:" sdistResult
         assertOutputDoesNotContain libAutogenMsg   sdistResult
         assertOutputDoesNotContain exeAutogenMsg   sdistResult
         assertOutputDoesNotContain testAutogenMsg  sdistResult

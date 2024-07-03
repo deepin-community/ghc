@@ -1,5 +1,4 @@
 # Setup configure
-Resolving dependencies...
 Configuring mylib-0.1.0.0...
 # Setup build
 Preprocessing library for mylib-0.1.0.0..
@@ -9,14 +8,13 @@ for mylib-0.1.0.0..
 Preprocessing library for mylib-0.1.0.0..
 Running Haddock on library instantiated with Database = <Database>
 for mylib-0.1.0.0..
-Documentation created: ../setup-external.cabal.dist/work/mylib/dist/doc/html/mylib/index.html
+Documentation created: ../setup-external.cabal.dist/work/mylib/dist/doc/html/mylib/
 # Setup copy
 Installing library in <PATH>
 # Setup register
 Registering library instantiated with Database = <Database>
 for mylib-0.1.0.0..
 # Setup configure
-Resolving dependencies...
 Configuring mysql-0.1.0.0...
 # Setup build
 Preprocessing library for mysql-0.1.0.0..
@@ -24,13 +22,12 @@ Building library for mysql-0.1.0.0..
 # Setup haddock
 Preprocessing library for mysql-0.1.0.0..
 Running Haddock on library for mysql-0.1.0.0..
-Documentation created: ../setup-external.cabal.dist/work/mysql/dist/doc/html/mysql/index.html
+Documentation created: ../setup-external.cabal.dist/work/mysql/dist/doc/html/mysql/
 # Setup copy
 Installing library in <PATH>
 # Setup register
 Registering library for mysql-0.1.0.0..
 # Setup configure
-Resolving dependencies...
 Configuring postgresql-0.1.0.0...
 # Setup build
 Preprocessing library for postgresql-0.1.0.0..
@@ -38,13 +35,12 @@ Building library for postgresql-0.1.0.0..
 # Setup haddock
 Preprocessing library for postgresql-0.1.0.0..
 Running Haddock on library for postgresql-0.1.0.0..
-Documentation created: ../setup-external.cabal.dist/work/postgresql/dist/doc/html/postgresql/index.html
+Documentation created: ../setup-external.cabal.dist/work/postgresql/dist/doc/html/postgresql/
 # Setup copy
 Installing library in <PATH>
 # Setup register
 Registering library for postgresql-0.1.0.0..
 # Setup configure
-Resolving dependencies...
 Configuring mylib-0.1.0.0...
 # Setup build
 Preprocessing library for mylib-0.1.0.0..
@@ -55,14 +51,13 @@ Preprocessing library for mylib-0.1.0.0..
 Running Haddock on library instantiated with
   Database = mysql-0.1.0.0:Database.MySQL
 for mylib-0.1.0.0..
-Documentation created: ../setup-external.cabal.dist/work/mylib/dist/doc/html/mylib/index.html
+Documentation created: ../setup-external.cabal.dist/work/mylib/dist/doc/html/mylib/
 # Setup copy
 Installing library in <PATH>
 # Setup register
 Registering library instantiated with Database = mysql-0.1.0.0:Database.MySQL
 for mylib-0.1.0.0..
 # Setup configure
-Resolving dependencies...
 Configuring mylib-0.1.0.0...
 # Setup build
 Preprocessing library for mylib-0.1.0.0..
@@ -74,7 +69,7 @@ Preprocessing library for mylib-0.1.0.0..
 Running Haddock on library instantiated with
   Database = postgresql-0.1.0.0:Database.PostgreSQL
 for mylib-0.1.0.0..
-Documentation created: ../setup-external.cabal.dist/work/mylib/dist/doc/html/mylib/index.html
+Documentation created: ../setup-external.cabal.dist/work/mylib/dist/doc/html/mylib/
 # Setup copy
 Installing library in <PATH>
 # Setup register
@@ -82,7 +77,6 @@ Registering library instantiated with
   Database = postgresql-0.1.0.0:Database.PostgreSQL
 for mylib-0.1.0.0..
 # Setup configure
-Resolving dependencies...
 Configuring src-0.1.0.0...
 # Setup build
 Preprocessing library for src-0.1.0.0..
@@ -90,21 +84,12 @@ Building library for src-0.1.0.0..
 # Setup haddock
 Preprocessing library for src-0.1.0.0..
 Running Haddock on library for src-0.1.0.0..
-Documentation created: ../setup-external.cabal.dist/work/src/dist/doc/html/src/index.html
+Documentation created: ../setup-external.cabal.dist/work/src/dist/doc/html/src/
 # Setup copy
 Installing library in <PATH>
 # Setup register
 Registering library for src-0.1.0.0..
 # Setup configure
-Resolving dependencies...
-Warning: solver failed to find a solution:
-Could not resolve dependencies:
-[__0] trying: exe-0.1.0.0 (user goal)
-[__1] next goal: src (dependency of exe)
-[__1] rejecting: src-<VERSION>/installed-<HASH>... (conflict: src => mylib==0.1.0.0/installed-0.1..., src => mylib==0.1.0.0/installed-0.1...)
-[__1] fail (backjumping, conflict set: exe, src)
-After searching the rest of the dependency tree exhaustively, these were the goals I've had most trouble fulfilling: exe (2), src (2)
-Trying configure anyway.
 Configuring exe-0.1.0.0...
 # Setup build
 Preprocessing executable 'exe' for exe-0.1.0.0..

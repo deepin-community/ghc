@@ -1,3 +1,5 @@
+{-# LANGUAGE Safe #-}
+
 {- |
 Module      :  Control.Monad.Cont
 Copyright   :  (c) The University of Glasgow 2001,
@@ -50,36 +52,38 @@ to understand and maintain.
 
 module Control.Monad.Cont (
     -- * MonadCont class
-    MonadCont(..),
+    MonadCont.MonadCont(..),
+    MonadCont.label,
+    MonadCont.label_,
+
     -- * The Cont monad
-    Cont,
-    cont,
-    runCont,
-    mapCont,
-    withCont,
+    Cont.Cont,
+    Cont.cont,
+    Cont.runCont,
+    Cont.evalCont,
+    Cont.mapCont,
+    Cont.withCont,
     -- * The ContT monad transformer
-    ContT(ContT),
-    runContT,
-    mapContT,
-    withContT,
-    module Control.Monad,
-    module Control.Monad.Trans,
+    Cont.ContT(ContT),
+    Cont.runContT,
+    Cont.evalContT,
+    Cont.mapContT,
+    Cont.withContT,
     -- * Example 1: Simple Continuation Usage
     -- $simpleContExample
 
     -- * Example 2: Using @callCC@
     -- $callCCExample
-    
+
     -- * Example 3: Using @ContT@ Monad Transformer
     -- $ContTExample
+
+    -- * Example 4: Using @label@
+    -- $labelExample
   ) where
 
-import Control.Monad.Cont.Class
-
-import Control.Monad.Trans
-import Control.Monad.Trans.Cont
-
-import Control.Monad
+import qualified Control.Monad.Cont.Class as MonadCont
+import qualified Control.Monad.Trans.Cont as Cont
 
 {- $simpleContExample
 Calculating length of a list continuation-style:
@@ -166,4 +170,20 @@ and passes it to the continuation.
 @askString@ takes as a parameter a continuation taking a string parameter,
 and returning @IO ()@.
 Compare its signature to 'runContT' definition.
+-}
+
+{-$labelExample
+
+The early exit behavior of 'Control.Monad.Cont.Class.callCC' can be leveraged to produce other idioms:
+
+> whatsYourNameLabel :: IO ()
+> whatsYourNameLabel = evalContT $ do
+>   (beginning, attempts) <- label (0 :: Int)
+>   liftIO $ putStrLn $ "Attempt #" <> show attempts
+>   liftIO $ putStrLn $ "What's your name?"
+>   name <- liftIO getLine
+>   when (null name) $ beginning (attempts + 1)
+>   liftIO $ putStrLn $ "Welcome, " ++ name ++ "!"
+
+Calling @beggining@ will interrupt execution of the block, skipping the welcome message, which will be printed only once at the very end of the loop.
 -}

@@ -1,5 +1,3 @@
-{-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE Trustworthy #-} -- can't use Safe due to IsList instance
 {-# LANGUAGE TypeFamilies #-}
 
@@ -42,13 +40,19 @@ module Data.List.NonEmpty (
    , tail        -- :: NonEmpty a -> [a]
    , last        -- :: NonEmpty a -> a
    , init        -- :: NonEmpty a -> [a]
+   , singleton   -- :: a -> NonEmpty a
    , (<|), cons  -- :: a -> NonEmpty a -> NonEmpty a
    , uncons      -- :: NonEmpty a -> (a, Maybe (NonEmpty a))
    , unfoldr     -- :: (a -> (b, Maybe a)) -> a -> NonEmpty b
    , sort        -- :: NonEmpty a -> NonEmpty a
    , reverse     -- :: NonEmpty a -> NonEmpty a
    , inits       -- :: Foldable f => f a -> NonEmpty a
+   , inits1      -- :: NonEmpty a -> NonEmpty (NonEmpty a)
    , tails       -- :: Foldable f => f a -> NonEmpty a
+   , tails1      -- :: NonEmpty a -> NonEmpty (NonEmpty a)
+   , append      -- :: NonEmpty a -> NonEmpty a -> NonEmpty a
+   , appendList  -- :: NonEmpty a -> [a] -> NonEmpty a
+   , prependList -- :: [a] -> NonEmpty a -> NonEmpty a
    -- * Building streams
    , iterate     -- :: (a -> a) -> a -> NonEmpty a
    , repeat      -- :: a -> NonEmpty a
@@ -98,7 +102,7 @@ import           Prelude             hiding (break, cycle, drop, dropWhile,
                                       last, length, map, repeat, reverse,
                                       scanl, scanl1, scanr, scanr1, span,
                                       splitAt, tail, take, takeWhile,
-                                      unzip, zip, zipWith, (!!))
+                                      unzip, zip, zipWith, (!!), Applicative(..))
 import qualified Prelude
 
 import           Control.Applicative (Applicative (..), Alternative (many))
@@ -108,8 +112,12 @@ import           Data.Function       (on)
 import qualified Data.List           as List
 import           Data.Ord            (comparing)
 import           GHC.Base            (NonEmpty(..))
+import           GHC.Stack.Types     (HasCallStack)
 
 infixr 5 <|
+
+-- $setup
+-- >>> import Prelude (negate)
 
 -- | Number of elements in 'NonEmpty' list.
 length :: NonEmpty a -> Int
@@ -154,11 +162,11 @@ unfoldr f a = case f a of
 
 -- | Extract the first element of the stream.
 head :: NonEmpty a -> a
-head ~(a :| _) = a
+head (a :| _) = a
 
 -- | Extract the possibly-empty tail of the stream.
 tail :: NonEmpty a -> [a]
-tail ~(_ :| as) = as
+tail (_ :| as) = as
 
 -- | Extract the last element of the stream.
 last :: NonEmpty a -> a
@@ -167,6 +175,12 @@ last ~(a :| as) = List.last (a : as)
 -- | Extract everything except the last element of the stream.
 init :: NonEmpty a -> [a]
 init ~(a :| as) = List.init (a : as)
+
+-- | Construct a 'NonEmpty' list from a single element.
+--
+-- @since 4.15
+singleton :: a -> NonEmpty a
+singleton a = a :| []
 
 -- | Prepend an element to the stream.
 (<|) :: a -> NonEmpty a -> NonEmpty a
@@ -183,9 +197,9 @@ sort = lift List.sort
 -- | Converts a normal list to a 'NonEmpty' stream.
 --
 -- Raises an error if given an empty list.
-fromList :: [a] -> NonEmpty a
+fromList :: HasCallStack => [a] -> NonEmpty a
 fromList (a:as) = a :| as
-fromList [] = errorWithoutStackTrace "NonEmpty.fromList: empty list"
+fromList [] = error "NonEmpty.fromList: empty list"
 
 -- | Convert a stream to a normal list efficiently.
 toList :: NonEmpty a -> [a]
@@ -203,14 +217,61 @@ map :: (a -> b) -> NonEmpty a -> NonEmpty b
 map f ~(a :| as) = f a :| fmap f as
 
 -- | The 'inits' function takes a stream @xs@ and returns all the
--- finite prefixes of @xs@.
+-- finite prefixes of @xs@, starting with the shortest. The result is
+-- 'NonEmpty' because the result always contains the empty list as the first
+-- element.
+--
+-- > inits [1,2,3] == [] :| [[1], [1,2], [1,2,3]]
+-- > inits [1] == [] :| [[1]]
+-- > inits [] == [] :| []
 inits :: Foldable f => f a -> NonEmpty [a]
 inits = fromList . List.inits . Foldable.toList
 
+-- | The 'inits1' function takes a 'NonEmpty' stream @xs@ and returns all the
+-- 'NonEmpty' finite prefixes of @xs@, starting with the shortest.
+--
+-- > inits1 (1 :| [2,3]) == (1 :| []) :| [1 :| [2], 1 :| [2,3]]
+-- > inits1 (1 :| []) == (1 :| []) :| []
+--
+-- @since 4.18
+inits1 :: NonEmpty a -> NonEmpty (NonEmpty a)
+inits1 =
+  -- fromList is an unsafe function, but this usage should be safe, since:
+  -- * `inits xs = [[], ..., init (init xs), init xs, xs]`
+  -- * If `xs` is nonempty, it follows that `inits xs` contains at least one nonempty
+  --   list, since `last (inits xs) = xs`.
+  -- * The only empty element of `inits xs` is the first one (by the definition of `inits`)
+  -- * Therefore, if we take all but the first element of `inits xs` i.e.
+  --   `tail (inits xs)`, we have a nonempty list of nonempty lists
+  fromList . Prelude.map fromList . List.tail . List.inits . Foldable.toList
+
 -- | The 'tails' function takes a stream @xs@ and returns all the
--- suffixes of @xs@.
+-- suffixes of @xs@, starting with the longest. The result is 'NonEmpty'
+-- because the result always contains the empty list as the last element.
+--
+-- > tails [1,2,3] == [1,2,3] :| [[2,3], [3], []]
+-- > tails [1] == [1] :| [[]]
+-- > tails [] == [] :| []
 tails   :: Foldable f => f a -> NonEmpty [a]
 tails = fromList . List.tails . Foldable.toList
+
+-- | The 'tails1' function takes a 'NonEmpty' stream @xs@ and returns all the
+-- non-empty suffixes of @xs@, starting with the longest.
+--
+-- > tails1 (1 :| [2,3]) == (1 :| [2,3]) :| [2 :| [3], 3 :| []]
+-- > tails1 (1 :| []) == (1 :| []) :| []
+--
+-- @since 4.18
+tails1 :: NonEmpty a -> NonEmpty (NonEmpty a)
+tails1 =
+  -- fromList is an unsafe function, but this usage should be safe, since:
+  -- * `tails xs = [xs, tail xs, tail (tail xs), ..., []]`
+  -- * If `xs` is nonempty, it follows that `tails xs` contains at least one nonempty
+  --   list, since `head (tails xs) = xs`.
+  -- * The only empty element of `tails xs` is the last one (by the definition of `tails`)
+  -- * Therefore, if we take all but the last element of `tails xs` i.e.
+  --   `init (tails xs)`, we have a nonempty list of nonempty lists
+  fromList . Prelude.map fromList . List.init . List.tails . Foldable.toList
 
 -- | @'insert' x xs@ inserts @x@ into the last position in @xs@ where it
 -- is still less than or equal to the next element. In particular, if the
@@ -390,11 +451,11 @@ isPrefixOf (y:ys) (x :| xs) = (y == x) && List.isPrefixOf ys xs
 -- @n@. Note that the head of the stream has index 0.
 --
 -- /Beware/: a negative or out-of-bounds index will cause an error.
-(!!) :: NonEmpty a -> Int -> a
+(!!) :: HasCallStack => NonEmpty a -> Int -> a
 (!!) ~(x :| xs) n
   | n == 0 = x
   | n > 0  = xs List.!! (n - 1)
-  | otherwise = errorWithoutStackTrace "NonEmpty.!! negative argument"
+  | otherwise = error "NonEmpty.!! negative index"
 infixl 9 !!
 
 -- | The 'zip' function takes two streams and returns a stream of
@@ -443,3 +504,38 @@ sortBy f = lift (List.sortBy f)
 -- > sortBy . comparing
 sortWith :: Ord o => (a -> o) -> NonEmpty a -> NonEmpty a
 sortWith = sortBy . comparing
+
+-- | A monomorphic version of '<>' for 'NonEmpty'.
+--
+-- >>> append (1 :| []) (2 :| [3])
+-- 1 :| [2,3]
+--
+-- @since 4.16
+append :: NonEmpty a -> NonEmpty a -> NonEmpty a
+append = (<>)
+
+-- | Attach a list at the end of a 'NonEmpty'.
+--
+-- >>> appendList (1 :| [2,3]) []
+-- 1 :| [2,3]
+--
+-- >>> appendList (1 :| [2,3]) [4,5]
+-- 1 :| [2,3,4,5]
+--
+-- @since 4.16
+appendList :: NonEmpty a -> [a] -> NonEmpty a
+appendList (x :| xs) ys = x :| xs <> ys
+
+-- | Attach a list at the beginning of a 'NonEmpty'.
+--
+-- >>> prependList [] (1 :| [2,3])
+-- 1 :| [2,3]
+--
+-- >>> prependList [negate 1, 0] (1 :| [2, 3])
+-- -1 :| [0,1,2,3]
+--
+-- @since 4.16
+prependList :: [a] -> NonEmpty a -> NonEmpty a
+prependList ls ne = case ls of
+  [] -> ne
+  (x : xs) -> x :| xs <> toList ne

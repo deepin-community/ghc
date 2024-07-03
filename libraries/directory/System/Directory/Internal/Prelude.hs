@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP #-}
+{-# OPTIONS_HADDOCK hide #-}
 -- |
 -- Stability: unstable
 -- Portability: portable
@@ -7,13 +7,6 @@
 
 module System.Directory.Internal.Prelude
   ( module Prelude
-#if !MIN_VERSION_base(4, 6, 0)
-  , lookupEnv
-#endif
-#if !MIN_VERSION_base(4, 8, 0)
-  , module Control.Applicative
-  , module Data.Functor
-#endif
   , module Control.Arrow
   , module Control.Concurrent
   , module Control.Exception
@@ -34,22 +27,11 @@ module System.Directory.Internal.Prelude
   , module System.Exit
   , module System.IO
   , module System.IO.Error
-  , module System.Posix.Internals
   , module System.Posix.Types
   , module System.Timeout
   , Void
   ) where
-#if MIN_VERSION_base(4, 6, 0)
-import System.Environment (lookupEnv)
-#else
-import Prelude hiding (catch)
-#endif
-#if MIN_VERSION_base(4, 8, 0)
 import Data.Void (Void)
-#else
-import Control.Applicative (Applicative, (<*>), (*>), pure)
-import Data.Functor ((<$>), (<$))
-#endif
 import Control.Arrow (second)
 import Control.Concurrent
   ( forkIO
@@ -58,11 +40,14 @@ import Control.Concurrent
   , putMVar
   , readMVar
   , takeMVar
+  , forkFinally
   )
 import Control.Exception
-  ( SomeException
+  ( Exception(displayException)
+  , SomeException
   , bracket
   , bracket_
+  , bracketOnError
   , catch
   , finally
   , mask
@@ -70,10 +55,10 @@ import Control.Exception
   , throwIO
   , try
   )
-import Control.Monad ((>=>), (<=<), unless, when, replicateM_)
+import Control.Monad ((>=>), (<=<), unless, when, replicateM, replicateM_)
 import Data.Bits ((.&.), (.|.), complement)
 import Data.Char (isAlpha, isAscii, toLower, toUpper)
-import Data.Foldable (for_, traverse_)
+import Data.Foldable (for_)
 import Data.Function (on)
 import Data.Maybe (catMaybes, fromMaybe, maybeToList)
 import Data.Monoid ((<>), mconcat, mempty)
@@ -111,24 +96,20 @@ import Foreign.C
   , CUShort(..)
   , CWString
   , CWchar(..)
-  , peekCString
-  , peekCWStringLen
   , throwErrnoIfMinus1Retry_
   , throwErrnoIfMinus1_
   , throwErrnoIfNull
-  , throwErrnoPathIfMinus1_
-  , withCString
-  , withCWString
   )
 import GHC.IO.Exception
   ( IOErrorType
     ( InappropriateType
+    , InvalidArgument
     , OtherError
     , UnsupportedOperation
     )
   )
 import GHC.IO.Encoding (getFileSystemEncoding)
-import System.Environment (getArgs, getEnv)
+import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.IO
   ( Handle
@@ -142,11 +123,11 @@ import System.IO
   , openBinaryTempFile
   , stderr
   , stdout
-  , withBinaryFile
   )
 import System.IO.Error
   ( IOError
   , catchIOError
+  , doesNotExistErrorType
   , illegalOperationErrorType
   , ioeGetErrorString
   , ioeGetErrorType
@@ -164,23 +145,5 @@ import System.IO.Error
   , tryIOError
   , userError
   )
-import System.Posix.Internals (withFilePath)
 import System.Posix.Types (EpochTime)
 import System.Timeout (timeout)
-
-#if !MIN_VERSION_base(4, 6, 0)
-lookupEnv :: String -> IO (Maybe String)
-lookupEnv name = do
-  env <- tryIOError (getEnv name)
-  case env of
-    Left err | isDoesNotExistError err -> pure Nothing
-             | otherwise               -> throwIO err
-    Right value -> pure (Just value)
-#endif
-
-#if !MIN_VERSION_base(4, 8, 0)
-data Void = Void
-
-_unusedVoid :: Void
-_unusedVoid = Void
-#endif

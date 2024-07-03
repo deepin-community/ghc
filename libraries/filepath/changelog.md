@@ -2,6 +2,65 @@
 
 _Note: below all `FilePath` values are unquoted, so `\\` really means two backslashes._
 
+## 1.4.300.1. *Jan 2024*
+
+* Backport bugfix for [`splitFileName`](https://github.com/haskell/filepath/issues/219) on windows
+
+## 1.4.200.1. *Dec 2023*
+
+* Improve deprecation warnings wrt [#209](https://github.com/haskell/filepath/issues/209)
+
+## 1.4.200.0 *Nov 2023*
+
+* deprecate `OsString` modules
+
+## 1.4.100.4 *Jul 2023*
+
+* Fix isInfixOf and breakSubString in Word16, wrt [#195](https://github.com/haskell/filepath/issues/195)
+
+## 1.4.100.3 *Feb 2023*
+
+* Fix a regression in `splitFileName` wrt [#189](https://github.com/haskell/filepath/pull/189)
+
+## 1.4.100.2 *Feb 2023*
+
+* Speed up `splitFileName`, `splitExtension`, `readDriveLetter` and various other helpers (up to 20x faster) by @Bodigrim
+
+## 1.4.100.1 *Feb 2023*
+
+* Fix regression in `System.FilePath.Windows.normalise` wrt [#187](https://github.com/haskell/filepath/issues/187)
+* Fix tests on GHC 9.4.4
+* Avoid head and tail
+
+## 1.4.100.0 *July 2022*
+
+Implementation of the [Abstract FilePath Proposal](https://gitlab.haskell.org/ghc/ghc/-/wikis/proposal/abstract-file-path)
+in user-space as a separate type.
+
+Introduction to the new API is explained [in this blog post](https://hasufell.github.io/posts/2022-06-29-fixing-haskell-filepaths.html).
+
+## 1.4.2.2 *Dec 2021*
+
+This release is purely a documentation release, fixing the broken haddock links.
+
+### Affected users
+
+This release affects users who apply downstream patches to `System.FilePath.Internal`,
+since `System.FilePath.Posix` and `System.FilePath.Windows` are now generated via `make cpp`
+during development.
+
+To make your patch apply, either apply it to `System.FilePath.Posix` and `System.FilePath.Windows`
+instead or run `make cpp` after applying your patch.
+
+### Changes
+
+* Document relation between `joinPath` and `(</>)` wrt [#82](https://github.com/haskell/filepath/issues/82), [#82](https://github.com/haskell/filepath/issues/86)
+* Clarify that `normalise` does not remove `..` wrt [#86](https://github.com/haskell/filepath/issues/86)
+* Make clear that `equalFilePath` does not expand `..` wrt [#87](https://github.com/haskell/filepath/issues/87)
+* Fix haddock source links by manually cpping wrt [#81](https://github.com/haskell/filepath/issues/81)
+* Make export list in `System.FilePath` explicit to get haddocks on the landing module
+
+
 ## 1.4.2.1 *Jul 2018*
 
  * Bundled with GHC 8.6.1

@@ -1,6 +1,6 @@
 #if __GLASGOW_HASKELL__ >= 709
 {-# LANGUAGE Safe #-}
-#elif __GLASGOW_HASKELL__ >= 701
+#else
 {-# LANGUAGE Trustworthy #-}
 #endif
 -----------------------------------------------------------------------------
@@ -158,6 +158,7 @@ type WindowMessage   = DWORD
  , wM_QUEUESYNC         = WM_QUEUESYNC
  , wM_USER              = WM_USER
  , wM_APP               = WM_APP
+ , wM_SETICON           = WM_SETICON
  }
 
 registerWindowMessage :: String -> IO WindowMessage
@@ -173,6 +174,8 @@ foreign import WINDOWS_CCONV unsafe "windows.h RegisterWindowMessageW"
  , sIZE_MAXIMIZED       = SIZE_MAXIMIZED
  , sIZE_MAXSHOW         = SIZE_MAXSHOW
  , sIZE_MAXHIDE         = SIZE_MAXHIDE
+ , iCON_SMALL           = ICON_SMALL
+ , iCON_BIG             = ICON_BIG
  }
 
 ----------------------------------------------------------------

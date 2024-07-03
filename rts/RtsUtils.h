@@ -17,22 +17,46 @@
 void initAllocator(void);
 void shutdownAllocator(void);
 
-void *stgMallocBytes(size_t n, char *msg)
-    GNUC3_ATTRIBUTE(__malloc__);
-
-void *stgReallocBytes(void *p, size_t n, char *msg);
-
-void *stgCallocBytes(size_t n, size_t m, char *msg)
-     GNUC3_ATTRIBUTE(__malloc__);
-
-char *stgStrndup(const char *s, size_t n);
-
 void stgFree(void* p);
+
+void *stgMallocBytes(size_t n, char *msg)
+    STG_MALLOC STG_MALLOC1(stgFree)
+    STG_ALLOC_SIZE1(1);
+/* Note: unlike `stgReallocBytes` and `stgCallocBytes`, `stgMallocBytes` is
+ * *not* `STG_RETURNS_NONNULL`, since it will return `NULL` when the requested
+ * allocation size is zero.
+ *
+ * See: https://gitlab.haskell.org/ghc/ghc/-/issues/22380
+ */
+
+void *stgReallocBytes(void *p, size_t n, char *msg)
+    STG_MALLOC1(stgFree)
+    STG_ALLOC_SIZE1(2)
+    STG_RETURNS_NONNULL;
+/* Note: `stgRallocBytes` can *not* be tagged as `STG_MALLOC`
+ * since its return value *can* alias an existing pointer (i.e.,
+ * the given pointer `p`).
+ * See the documentation of the `malloc` attribute in the GCC manual
+ * for more information.
+ */
+
+void *stgCallocBytes(size_t count, size_t size, char *msg)
+    STG_MALLOC STG_MALLOC1(stgFree)
+    STG_ALLOC_SIZE2(1, 2)
+    STG_RETURNS_NONNULL;
+
+char *stgStrndup(const char *s, size_t n)
+    STG_MALLOC STG_MALLOC1(stgFree);
+
+void *stgMallocAlignedBytes(size_t n, size_t align, char *msg);
+
+void stgFreeAligned(void *p);
 
 /* -----------------------------------------------------------------------------
  * Misc other utilities
  * -------------------------------------------------------------------------- */
 
+int rtsSleep(Time t);
 char *time_str(void);
 char *showStgWord64(StgWord64, char *, bool);
 

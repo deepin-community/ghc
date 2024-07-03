@@ -1,8 +1,9 @@
 {-# LANGUAGE CPP #-}
 #if __GLASGOW_HASKELL__ >= 702
 {-# LANGUAGE Safe #-}
+{-# LANGUAGE DeriveGeneric #-}
 #endif
-#if __GLASGOW_HASKELL__ >= 710
+#if __GLASGOW_HASKELL__ >= 710 && __GLASGOW_HASKELL__ < 802
 {-# LANGUAGE AutoDeriveTypeable #-}
 #endif
 -----------------------------------------------------------------------------
@@ -31,17 +32,30 @@ module Control.Applicative.Lift (
     eitherToErrors
   ) where
 
+#if MIN_VERSION_base(4,18,0)
+import Data.Foldable1 (Foldable1(foldMap1))
+#endif
 import Data.Functor.Classes
 
 import Control.Applicative
-import Data.Foldable (Foldable(foldMap))
 import Data.Functor.Constant
+#if !(MIN_VERSION_base(4,8,0))
+import Data.Foldable (Foldable(foldMap))
 import Data.Monoid (Monoid(..))
 import Data.Traversable (Traversable(traverse))
+#endif
+#if __GLASGOW_HASKELL__ >= 704
+import GHC.Generics
+#endif
 
 -- | Applicative functor formed by adding pure computations to a given
 -- applicative functor.
 data Lift f a = Pure a | Other (f a)
+#if __GLASGOW_HASKELL__ >= 710
+    deriving (Generic, Generic1)
+#elif __GLASGOW_HASKELL__ >= 704
+    deriving (Generic)
+#endif
 
 instance (Eq1 f) => Eq1 (Lift f) where
     liftEq eq (Pure x1) (Pure x2) = eq x1 x2
@@ -91,10 +105,8 @@ instance (Traversable f) => Traversable (Lift f) where
 instance (Applicative f) => Applicative (Lift f) where
     pure = Pure
     {-# INLINE pure #-}
-    Pure f <*> Pure x = Pure (f x)
-    Pure f <*> Other y = Other (f <$> y)
-    Other f <*> Pure x = Other (($ x) <$> f)
-    Other f <*> Other y = Other (f <*> y)
+    Pure f <*> ax = f <$> ax
+    Other f <*> ax = Other (f <*> unLift ax)
     {-# INLINE (<*>) #-}
 
 -- | A combination is 'Pure' only either part is.
@@ -105,6 +117,13 @@ instance (Alternative f) => Alternative (Lift f) where
     Other _ <|> Pure y = Pure y
     Other x <|> Other y = Other (x <|> y)
     {-# INLINE (<|>) #-}
+
+#if MIN_VERSION_base(4,18,0)
+instance (Foldable1 f) => Foldable1 (Lift f) where
+    foldMap1 f (Pure x)  = f x
+    foldMap1 f (Other y) = foldMap1 f y
+    {-# INLINE foldMap1 #-}
+#endif
 
 -- | Projection to the other functor.
 unLift :: (Applicative f) => Lift f a -> f a
@@ -131,8 +150,9 @@ elimLift _ g (Other e) = g e
 
 -- | An applicative functor that collects a monoid (e.g. lists) of errors.
 -- A sequence of computations fails if any of its components do, but
--- unlike monads made with 'ExceptT' from "Control.Monad.Trans.Except",
--- these computations continue after an error, collecting all the errors.
+-- unlike monads made with 'Control.Monad.Trans.Except.ExceptT' from
+-- "Control.Monad.Trans.Except", these computations continue after an
+-- error, collecting all the errors.
 --
 -- * @'pure' f '<*>' 'pure' x = 'pure' (f x)@
 --

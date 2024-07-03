@@ -44,6 +44,7 @@ module System.Posix.Process.Common (
     -- ** Process times
     ProcessTimes(..),
     getProcessTimes,
+    clocksPerSec,
 
     -- ** Scheduling priority
     nice,
@@ -81,8 +82,22 @@ import Control.Monad
 
 import Control.Exception.Base ( bracket, getMaskingState, MaskingState(..) ) -- used by forkProcess
 import GHC.TopHandler   ( runIO )
-import GHC.IO ( unsafeUnmask, uninterruptibleMask_ )
 
+#if defined(HAVE_GETPID)
+import GHC.IO ( unsafeUnmask, uninterruptibleMask_  )
+#else
+import System.IO.Error ( ioeSetLocation )
+import GHC.IO.Exception ( unsupportedOperation )
+#endif
+
+#if !defined(HAVE_GETPID)
+
+getProcessID :: IO ProcessID
+{-# WARNING getProcessID
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+getProcessID = ioError (ioeSetLocation unsupportedOperation "getProcessID")
+
+#else
 -- -----------------------------------------------------------------------------
 -- Process environment
 
@@ -94,13 +109,35 @@ getProcessID = c_getpid
 foreign import ccall unsafe "getpid"
    c_getpid :: IO CPid
 
--- | 'getProcessID' calls @getppid@ to obtain the 'ProcessID' for
+#endif // HAVE_GETPID
+
+#if !defined(HAVE_GETPID)
+
+getParentProcessID :: IO ProcessID
+{-# WARNING getParentProcessID
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+getParentProcessID = ioError (ioeSetLocation unsupportedOperation "getParentProcessID")
+
+#else
+
+-- | 'getParentProcessID' calls @getppid@ to obtain the 'ProcessID' for
 --   the parent of the current process.
 getParentProcessID :: IO ProcessID
 getParentProcessID = c_getppid
 
 foreign import ccall unsafe "getppid"
   c_getppid :: IO CPid
+
+#endif // HAVE_GETPID
+
+#if !defined(HAVE_GETPID)
+
+getProcessGroupID :: IO ProcessGroupID
+{-# WARNING getProcessGroupID
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+getProcessGroupID = ioError (ioeSetLocation unsupportedOperation "getProcessGroupID")
+
+#else
 
 -- | 'getProcessGroupID' calls @getpgrp@ to obtain the
 --   'ProcessGroupID' for the current process.
@@ -110,6 +147,17 @@ getProcessGroupID = c_getpgrp
 foreign import ccall unsafe "getpgrp"
   c_getpgrp :: IO CPid
 
+#endif // HAVE_GETPID
+
+#if !defined(HAVE_GETPID)
+
+getProcessGroupIDOf :: ProcessID -> IO ProcessGroupID
+{-# WARNING getProcessGroupIDOf
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+getProcessGroupIDOf _ = ioError (ioeSetLocation unsupportedOperation "getProcessGroupIDOf")
+
+#else
+
 -- | @'getProcessGroupIDOf' pid@ calls @getpgid@ to obtain the
 --   'ProcessGroupID' for process @pid@.
 getProcessGroupIDOf :: ProcessID -> IO ProcessGroupID
@@ -118,6 +166,8 @@ getProcessGroupIDOf pid =
 
 foreign import ccall unsafe "getpgid"
   c_getpgid :: CPid -> IO CPid
+
+#endif // HAVE_GETPID
 
 {-
    To be added in the future, after the deprecation period for the
@@ -132,6 +182,15 @@ createProcessGroup = do
   return pgid
 -}
 
+#if !defined(HAVE_GETPID)
+
+createProcessGroupFor :: ProcessID -> IO ProcessGroupID
+{-# WARNING createProcessGroupFor
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+createProcessGroupFor _ = ioError (ioeSetLocation unsupportedOperation "createProcessGroupFor")
+
+#else
+
 -- | @'createProcessGroupFor' pid@ calls @setpgid@ to make
 --   process @pid@ a new process group leader.
 createProcessGroupFor :: ProcessID -> IO ProcessGroupID
@@ -139,11 +198,24 @@ createProcessGroupFor pid = do
   throwErrnoIfMinus1_ "createProcessGroupFor" (c_setpgid pid 0)
   return pid
 
+#endif // HAVE_GETPID
+
+#if !defined(HAVE_GETPID)
+
+joinProcessGroup :: ProcessGroupID -> IO ()
+{-# WARNING joinProcessGroup
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+joinProcessGroup _ = ioError (ioeSetLocation unsupportedOperation "joinProcessGroup")
+
+#else
+
 -- | @'joinProcessGroup' pgid@ calls @setpgid@ to set the
 --   'ProcessGroupID' of the current process to @pgid@.
 joinProcessGroup :: ProcessGroupID -> IO ()
 joinProcessGroup pgid =
   throwErrnoIfMinus1_ "joinProcessGroup" (c_setpgid 0 pgid)
+
+#endif // HAVE_GETPID
 
 {-
    To be added in the future, after the deprecation period for the
@@ -156,6 +228,15 @@ setProcessGroupID pgid =
   throwErrnoIfMinus1_ "setProcessGroupID" (c_setpgid 0 pgid)
 -}
 
+#if !defined(HAVE_GETPID)
+
+setProcessGroupIDOf :: ProcessID -> ProcessGroupID -> IO ()
+{-# WARNING setProcessGroupIDOf
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+setProcessGroupIDOf _ _ = ioError (ioeSetLocation unsupportedOperation "setProcessGroupIDOf")
+
+#else
+
 -- | @'setProcessGroupIDOf' pid pgid@ calls @setpgid@ to set the
 --   'ProcessGroupIDOf' for process @pid@ to @pgid@.
 setProcessGroupIDOf :: ProcessID -> ProcessGroupID -> IO ()
@@ -165,6 +246,17 @@ setProcessGroupIDOf pid pgid =
 foreign import ccall unsafe "setpgid"
   c_setpgid :: CPid -> CPid -> IO CInt
 
+#endif // HAVE_GETPID
+
+#if !defined(HAVE_GETPID)
+
+createSession :: IO ProcessGroupID
+{-# WARNING createSession
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+createSession = ioError (ioeSetLocation unsupportedOperation "createSession")
+
+#else
+
 -- | 'createSession' calls @setsid@ to create a new session
 --   with the current process as session leader.
 createSession :: IO ProcessGroupID
@@ -172,6 +264,8 @@ createSession = throwErrnoIfMinus1 "createSession" c_setsid
 
 foreign import ccall unsafe "setsid"
   c_setsid :: IO CPid
+
+#endif // HAVE_GETPID
 
 -- -----------------------------------------------------------------------------
 -- Process times
@@ -185,6 +279,8 @@ data ProcessTimes
                  , childUserTime   :: ClockTick
                  , childSystemTime :: ClockTick
                  }
+
+#if defined(HAVE_TIMES)
 
 -- | 'getProcessTimes' calls @times@ to obtain time-accounting
 --   information for the current process and its children.
@@ -208,8 +304,44 @@ data {-# CTYPE "struct tms" #-} CTms
 foreign import capi unsafe "HsUnix.h times"
   c_times :: Ptr CTms -> IO CClock
 
+-- | Returns the value from the @CLOCK_PER_SEC@ macro, which is required by POSIX.
+clocksPerSec :: ClockTick
+#ifdef HAVE_CLOCKS_PER_SEC
+clocksPerSec = c_clocks_per_sec
+
+foreign import capi unsafe "HsUnix.h __hsunix_clocks_per_second"
+  c_clocks_per_sec :: CClock
+#else
+{-# WARNING clocksPerSec
+    "CLOCK_PER_SEC not defined, defaulting to the value 1000000 as indicated by POSIX (CPP guard: @#if HAVE_CLOCKS_PER_SEC@)" #-}
+clocksPerSec = 1000000
+#endif // HAVE_CLOCKS_PER_SEC
+
+#else
+
+getProcessTimes :: IO ProcessTimes
+{-# WARNING getProcessTimes
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_TIMES@)" #-}
+getProcessTimes = ioError (ioeSetLocation unsupportedOperation "getProcessTimes")
+
+clocksPerSec :: ClockTick
+{-# WARNING clocksPerSec
+    "CLOCK_PER_SEC not defined, defaulting to the value 1000000 as indicated by POSIX (CPP guard: @#if HAVE_CLOCKS_PER_SEC@)" #-}
+clocksPerSec = 1000000
+
+#endif // HAVE_TIMES
+
 -- -----------------------------------------------------------------------------
 -- Process scheduling priority
+
+#if !defined(HAVE_GETPID)
+
+nice :: Int -> IO ()
+{-# WARNING nice
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+nice _ = ioError (ioeSetLocation unsupportedOperation "nice")
+
+#else
 
 nice :: Int -> IO ()
 nice prio = do
@@ -222,9 +354,27 @@ nice prio = do
 foreign import ccall unsafe "nice"
   c_nice :: CInt -> IO CInt
 
+#endif // HAVE_GETPID
+
 getProcessPriority      :: ProcessID      -> IO Int
 getProcessGroupPriority :: ProcessGroupID -> IO Int
 getUserPriority         :: UserID         -> IO Int
+
+#if !defined(HAVE_GETPID)
+
+{-# WARNING getProcessPriority
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+getProcessPriority _ = ioError (ioeSetLocation unsupportedOperation "getProcessPriority")
+
+{-# WARNING getProcessGroupPriority
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+getProcessGroupPriority _ = ioError (ioeSetLocation unsupportedOperation "getProcessGroupPriority")
+
+{-# WARNING getUserPriority
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+getUserPriority _ = ioError (ioeSetLocation unsupportedOperation "getUserPriority")
+
+#else
 
 getProcessPriority pid = do
   r <- throwErrnoIfMinus1 "getProcessPriority" $
@@ -244,9 +394,27 @@ getUserPriority uid = do
 foreign import ccall unsafe "getpriority"
   c_getpriority :: CInt -> CInt -> IO CInt
 
+#endif // HAVE_GETPID
+
 setProcessPriority      :: ProcessID      -> Int -> IO ()
 setProcessGroupPriority :: ProcessGroupID -> Int -> IO ()
 setUserPriority         :: UserID         -> Int -> IO ()
+
+#if !defined(HAVE_GETPID)
+
+{-# WARNING setProcessPriority
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+setProcessPriority _ _ = ioError (ioeSetLocation unsupportedOperation "setProcessPriority")
+
+{-# WARNING setProcessGroupPriority
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+setProcessGroupPriority _ _ = ioError (ioeSetLocation unsupportedOperation "setProcessGroupPriority")
+
+{-# WARNING setUserPriority
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+setUserPriority _ _ = ioError (ioeSetLocation unsupportedOperation "setUserPriority")
+
+#else
 
 setProcessPriority pid val =
   throwErrnoIfMinus1_ "setProcessPriority" $
@@ -262,6 +430,8 @@ setUserPriority uid val =
 
 foreign import ccall unsafe "setpriority"
   c_setpriority :: CInt -> CInt -> CInt -> IO CInt
+
+#endif // HAVE_GETPID
 
 -- -----------------------------------------------------------------------------
 -- Forking, execution
@@ -279,7 +449,25 @@ The exception masking state of the executed action is inherited
 threads are not copied into the child process, it's easy to go wrong:
 e.g. by accessing some shared resource that was held by another thread
 in the parent.
+
+GHC note: 'forkProcess' is not currently very well supported when using multiple
+capabilities (@+RTS -N@), although it is supported with @-threaded@ as
+long as only one capability is being used.
 -}
+
+#if !defined(HAVE_GETPID)
+
+forkProcess :: IO () -> IO ProcessID
+{-# WARNING forkProcess
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+forkProcess _ = ioError (ioeSetLocation unsupportedOperation "forkProcess")
+
+forkProcessWithUnmask :: ((forall a . IO a -> IO a) -> IO ()) -> IO ProcessID
+{-# WARNING forkProcessWithUnmask
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+forkProcessWithUnmask _ = ioError (ioeSetLocation unsupportedOperation "forkProcessWithUnmask")
+
+#else
 
 forkProcess :: IO () -> IO ProcessID
 forkProcess action = do
@@ -305,6 +493,17 @@ foreign import ccall "forkProcess" forkProcessPrim :: StablePtr (IO ()) -> IO CP
 forkProcessWithUnmask :: ((forall a . IO a -> IO a) -> IO ()) -> IO ProcessID
 forkProcessWithUnmask action = forkProcess (action unsafeUnmask)
 
+#endif // HAVE_GETPID
+
+#if !defined(HAVE_GETPID)
+
+getProcessStatus :: Bool -> Bool -> ProcessID -> IO (Maybe ProcessStatus)
+{-# WARNING getProcessStatus
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+getProcessStatus _ _ _ = ioError (ioeSetLocation unsupportedOperation "getProcessStatus")
+
+#else
+
 -- -----------------------------------------------------------------------------
 -- Waiting for process termination
 
@@ -327,6 +526,20 @@ getProcessStatus block stopped pid =
 -- safe/interruptible, because this call might block
 foreign import ccall interruptible "waitpid"
   c_waitpid :: CPid -> Ptr CInt -> CInt -> IO CPid
+
+#endif // HAVE_GETPID
+
+#if !defined(HAVE_GETPID)
+
+getGroupProcessStatus :: Bool
+                      -> Bool
+                      -> ProcessGroupID
+                      -> IO (Maybe (ProcessID, ProcessStatus))
+{-# WARNING getGroupProcessStatus
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+getGroupProcessStatus _ _ _ = ioError (ioeSetLocation unsupportedOperation "getGroupProcessStatus")
+
+#else
 
 -- | @'getGroupProcessStatus' blk stopped pgid@ calls @waitpid@,
 --   returning @'Just' (pid, tc)@, the 'ProcessID' and 'ProcessStatus'
@@ -351,6 +564,17 @@ getGroupProcessStatus block stopped pgid =
       _  -> do ps <- readWaitStatus wstatp
                return (Just (pid, ps))
 
+#endif // HAVE_GETPID
+
+#if !defined(HAVE_GETPID)
+
+getAnyProcessStatus :: Bool -> Bool -> IO (Maybe (ProcessID, ProcessStatus))
+{-# WARNING getAnyProcessStatus
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+getAnyProcessStatus _ _ = ioError (ioeSetLocation unsupportedOperation "getAnyProcessStatus")
+
+#else
+
 -- | @'getAnyProcessStatus' blk stopped@ calls @waitpid@, returning
 --   @'Just' (pid, tc)@, the 'ProcessID' and 'ProcessStatus' for any
 --   child process if a child process has exited, or 'Nothing' if
@@ -363,6 +587,10 @@ getGroupProcessStatus block stopped pgid =
 --   @WUNTRACED@ is set in the options for @waitpid@, otherwise not.
 getAnyProcessStatus :: Bool -> Bool -> IO (Maybe (ProcessID, ProcessStatus))
 getAnyProcessStatus block stopped = getGroupProcessStatus block stopped 1
+
+#endif // HAVE_GETPID
+
+#if defined(HAVE_GETPID)
 
 waitOptions :: Bool -> Bool -> CInt
 --             block   stopped
@@ -378,20 +606,46 @@ readWaitStatus wstatp = do
   wstat <- peek wstatp
   decipherWaitStatus wstat
 
+#endif // HAVE_GETPID
+
 -- -----------------------------------------------------------------------------
 -- Exiting
 
 -- | @'exitImmediately' status@ calls @_exit@ to terminate the process
 --   with the indicated exit @status@.
---   The operation never returns.
-exitImmediately :: ExitCode -> IO ()
-exitImmediately exitcode = c_exit (exitcode2Int exitcode)
+--   The operation never returns. Since it does not use the Haskell exception
+--   system and it cannot be caught.
+--
+--   Note: Prior to @unix-2.8.0.0@ the type-signature of 'exitImmediately' was
+--   @ExitCode -> IO ()@.
+--
+-- @since 2.8.0.0
+exitImmediately :: ExitCode -> IO a
+exitImmediately status = do
+    _ <- c_exit (exitcode2Int status)
+    -- The above will exit the program, but need the following to satisfy
+    -- the type signature.
+    exitImmediately status
   where
     exitcode2Int ExitSuccess = 0
     exitcode2Int (ExitFailure n) = fromIntegral n
 
 foreign import ccall unsafe "exit"
   c_exit :: CInt -> IO ()
+
+#if !defined(HAVE_GETPID)
+
+createProcessGroup :: ProcessID -> IO ProcessGroupID
+{-# WARNING createProcessGroup
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+createProcessGroup _ = ioError (ioeSetLocation unsupportedOperation "createProcessGroup")
+
+setProcessGroupID :: ProcessID -> ProcessGroupID -> IO ()
+{-# WARNING setProcessGroupID
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_GETPID@)" #-}
+setProcessGroupID _ _ = ioError (ioeSetLocation unsupportedOperation "setProcessGroupID")
+
+#else
 
 -- -----------------------------------------------------------------------------
 -- Deprecated or subject to change
@@ -418,3 +672,5 @@ setProcessGroupID pid pgid =
   throwErrnoIfMinus1_ "setProcessGroupID" (c_setpgid pid pgid)
 
 -- -----------------------------------------------------------------------------
+
+#endif // HAVE_GETPID
