@@ -1,18 +1,35 @@
-module System.Directory.Internal.Common where
+module System.Directory.Internal.Common
+  ( module System.Directory.Internal.Common
+  , OsPath
+  , OsString
+  ) where
 import Prelude ()
 import System.Directory.Internal.Prelude
-import System.FilePath
-  ( addTrailingPathSeparator
+import GHC.IO.Encoding.Failure (CodingFailureMode(TransliterateCodingFailure))
+import GHC.IO.Encoding.UTF16 (mkUTF16le)
+import GHC.IO.Encoding.UTF8 (mkUTF8)
+import System.IO (hSetBinaryMode)
+import System.OsPath
+  ( OsPath
+  , OsString
+  , addTrailingPathSeparator
+  , decodeUtf
+  , decodeWith
+  , encodeUtf
   , hasTrailingPathSeparator
   , isPathSeparator
   , isRelative
   , joinDrive
   , joinPath
   , normalise
+  , pack
   , pathSeparator
   , pathSeparators
   , splitDirectories
   , splitDrive
+  , toChar
+  , unpack
+  , unsafeFromChar
   )
 
 -- | A generator with side-effects.
@@ -59,13 +76,7 @@ sequenceWithIOErrors_ actions = go (Right ()) actions
     go (Right ()) []       = pure ()
     go s          (m : ms) = s `seq` do
       r <- tryIOError m
-      go (thenEither s r) ms
-
-    -- equivalent to (*>) for Either, defined here to retain compatibility
-    -- with base prior to 4.3
-    thenEither :: Either b a -> Either b a -> Either b a
-    thenEither x@(Left _) _ = x
-    thenEither _          y = y
+      go (s *> r) ms
 
 -- | Similar to 'try' but only catches a specify kind of 'IOError' as
 --   specified by the predicate.
@@ -95,46 +106,69 @@ ioeAddLocation e loc = do
     newLoc = loc <> if null oldLoc then "" else ":" <> oldLoc
     oldLoc = ioeGetLocation e
 
+rightOrError :: Exception e => Either e a -> a
+rightOrError (Left e)  = error (displayException e)
+rightOrError (Right a) = a
+
+-- | Fallibly converts String to OsString. Only intended to be used on literals.
+os :: String -> OsString
+os = rightOrError . encodeUtf
+
+-- | Fallibly converts OsString to String. Only intended to be used on literals.
+so :: OsString -> String
+so = rightOrError . decodeUtf
+
+ioeSetOsPath :: IOError -> OsPath -> IOError
+ioeSetOsPath err =
+  ioeSetFileName err .
+  rightOrError .
+  decodeWith
+    (mkUTF8 TransliterateCodingFailure)
+    (mkUTF16le TransliterateCodingFailure)
+
 -- | Given a list of path segments, expand @.@ and @..@.  The path segments
 -- must not contain path separators.
-expandDots :: [FilePath] -> [FilePath]
+expandDots :: [OsPath] -> [OsPath]
 expandDots = reverse . go []
   where
     go ys' xs' =
       case xs' of
         [] -> ys'
-        x : xs ->
-          case x of
-            "." -> go ys' xs
-            ".." ->
+        x : xs
+          | x == os "." -> go ys' xs
+          | x == os ".." ->
               case ys' of
                 [] -> go (x : ys') xs
-                ".." : _ -> go (x : ys') xs
-                _ : ys -> go ys xs
-            _ -> go (x : ys') xs
+                y : ys
+                  | y == os ".." -> go (x : ys') xs
+                  | otherwise -> go ys xs
+          | otherwise -> go (x : ys') xs
 
 -- | Convert to the right kind of slashes.
-normalisePathSeps :: FilePath -> FilePath
-normalisePathSeps p = (\ c -> if isPathSeparator c then pathSeparator else c) <$> p
+normalisePathSeps :: OsPath -> OsPath
+normalisePathSeps p = pack (normaliseChar <$> unpack p)
+  where normaliseChar c = if isPathSeparator c then pathSeparator else c
 
 -- | Remove redundant trailing slashes and pick the right kind of slash.
-normaliseTrailingSep :: FilePath -> FilePath
+normaliseTrailingSep :: OsPath -> OsPath
 normaliseTrailingSep path = do
-  let path' = reverse path
+  let path' = reverse (unpack path)
   let (sep, path'') = span isPathSeparator path'
   let addSep = if null sep then id else (pathSeparator :)
-  reverse (addSep path'')
+  pack (reverse (addSep path''))
 
 -- | Convert empty paths to the current directory, otherwise leave it
 -- unchanged.
-emptyToCurDir :: FilePath -> FilePath
-emptyToCurDir ""   = "."
-emptyToCurDir path = path
+emptyToCurDir :: OsPath -> OsPath
+emptyToCurDir path
+  | path == mempty = os "."
+  | otherwise      = path
 
 -- | Similar to 'normalise' but empty paths stay empty.
-simplifyPosix :: FilePath -> FilePath
-simplifyPosix ""   = ""
-simplifyPosix path = normalise path
+simplifyPosix :: OsPath -> OsPath
+simplifyPosix path
+  | path == mempty = mempty
+  | otherwise      = normalise path
 
 -- | Similar to 'normalise' but:
 --
@@ -143,12 +177,11 @@ simplifyPosix path = normalise path
 -- * paths starting with @\\\\?\\@ are preserved.
 --
 -- The goal is to preserve the meaning of paths better than 'normalise'.
-simplifyWindows :: FilePath -> FilePath
-simplifyWindows "" = ""
-simplifyWindows path =
-  case drive' of
-    "\\\\?\\" -> drive' <> subpath
-    _ -> simplifiedPath
+simplifyWindows :: OsPath -> OsPath
+simplifyWindows path
+  | path == mempty         = mempty
+  | drive' == os "\\\\?\\" = drive' <> subpath
+  | otherwise              = simplifiedPath
   where
     simplifiedPath = joinDrive drive' subpath'
     (drive, subpath) = splitDrive path
@@ -157,24 +190,29 @@ simplifyWindows path =
                stripPardirs . expandDots . skipSeps .
                splitDirectories $ subpath
 
-    upperDrive d = case d of
-      c : ':' : s | isAlpha c && all isPathSeparator s -> toUpper c : ':' : s
+    upperDrive d = case unpack d of
+      c : k : s
+        | isAlpha (toChar c), toChar k == ':', all isPathSeparator s ->
+          -- unsafeFromChar is safe here since all characters are ASCII.
+          pack (unsafeFromChar (toUpper (toChar c)) : unsafeFromChar ':' : s)
       _ -> d
-    skipSeps = filter (not . (`elem` (pure <$> pathSeparators)))
-    stripPardirs | pathIsAbsolute || subpathIsAbsolute = dropWhile (== "..")
+    skipSeps =
+      (pack <$>) .
+      filter (not . (`elem` (pure <$> pathSeparators))) .
+      (unpack <$>)
+    stripPardirs | pathIsAbsolute || subpathIsAbsolute = dropWhile (== os "..")
                  | otherwise = id
-    prependSep | subpathIsAbsolute = (pathSeparator :)
+    prependSep | subpathIsAbsolute = (pack [pathSeparator] <>)
                | otherwise = id
     avoidEmpty | not pathIsAbsolute
-                 && (null drive || hasTrailingPathSep) -- prefer "C:" over "C:."
+               , drive == mempty || hasTrailingPathSep -- prefer "C:" over "C:."
                  = emptyToCurDir
                | otherwise = id
-    appendSep p | hasTrailingPathSep
-                  && not (pathIsAbsolute && null p)
+    appendSep p | hasTrailingPathSep, not (pathIsAbsolute && p == mempty)
                   = addTrailingPathSeparator p
                 | otherwise = p
     pathIsAbsolute = not (isRelative path)
-    subpathIsAbsolute = any isPathSeparator (take 1 subpath)
+    subpathIsAbsolute = any isPathSeparator (take 1 (unpack subpath))
     hasTrailingPathSep = hasTrailingPathSeparator subpath
 
 data FileType = File
@@ -205,26 +243,13 @@ data Permissions
   , searchable :: Bool
   } deriving (Eq, Ord, Read, Show)
 
--- | Truncate the destination file and then copy the contents of the source
--- file to the destination file.  If the destination file already exists, its
--- attributes shall remain unchanged.  Otherwise, its attributes are reset to
--- the defaults.
-copyFileContents :: FilePath            -- ^ Source filename
-                 -> FilePath            -- ^ Destination filename
-                 -> IO ()
-copyFileContents fromFPath toFPath =
-  (`ioeAddLocation` "copyFileContents") `modifyIOError` do
-    withBinaryFile toFPath WriteMode $ \ hTo ->
-      copyFileToHandle fromFPath hTo
-
--- | Copy all data from a file to a handle.
-copyFileToHandle :: FilePath            -- ^ Source file
-                 -> Handle              -- ^ Destination handle
-                 -> IO ()
-copyFileToHandle fromFPath hTo =
-  (`ioeAddLocation` "copyFileToHandle") `modifyIOError` do
-    withBinaryFile fromFPath ReadMode $ \ hFrom ->
-      copyHandleData hFrom hTo
+withBinaryHandle :: IO Handle -> (Handle -> IO r) -> IO r
+withBinaryHandle open = bracket openBinary hClose
+  where
+    openBinary = do
+      h <- open
+      hSetBinaryMode h True
+      pure h
 
 -- | Copy data from one handle to another until end of file.
 copyHandleData :: Handle                -- ^ Source handle
@@ -271,6 +296,16 @@ data XdgDirectory
     -- On Windows, the default is @%LOCALAPPDATA%@
     -- (e.g. @C:\/Users\//\<user\>/\/AppData\/Local@).
     -- Can be considered as the user-specific equivalent of @\/var\/cache@.
+  | XdgState
+   -- ^ For data that should persist between (application) restarts,
+   -- but that is not important or portable enough to the user that it
+   -- should be stored in 'XdgData'.
+   -- It uses the @XDG_STATE_HOME@ environment variable.
+   -- On non-Windows sytems, the default is @~\/.local\/state@.  On
+   -- Windows, the default is @%LOCALAPPDATA%@
+   -- (e.g. @C:\/Users\//\<user\>/\/AppData\/Local@).
+   --
+   -- @since 1.3.7.0
   deriving (Bounded, Enum, Eq, Ord, Read, Show)
 
 -- | Search paths for various application data, as specified by the

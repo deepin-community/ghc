@@ -13,11 +13,14 @@
 bdescr *allocLargeChunk (W_ min, W_ max);
 bdescr *allocLargeChunkOnNode (uint32_t node, W_ min, W_ max);
 
+void deferMBlockFreeing(void);
+void commitMBlockFreeing(void);
+
 /* Debugging  -------------------------------------------------------------- */
 
 extern W_ countBlocks       (bdescr *bd);
 extern W_ countAllocdBlocks (bdescr *bd);
-extern void returnMemoryToOS(uint32_t n);
+extern uint32_t returnMemoryToOS(uint32_t n);
 
 #if defined(DEBUG)
 void checkFreeListSanity(void);

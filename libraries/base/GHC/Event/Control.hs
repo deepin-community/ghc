@@ -26,9 +26,9 @@ module GHC.Event.Control
     , setNonBlockingFD
     ) where
 
+#include <ghcplatform.h>
 #include "EventConfig.h"
 
-import Foreign.ForeignPtr (ForeignPtr)
 import GHC.Base
 import GHC.IORef
 import GHC.Conc.Signal (Signal)
@@ -37,7 +37,7 @@ import GHC.Show (Show)
 import GHC.Word (Word8)
 import Foreign.C.Error (throwErrnoIfMinus1_, throwErrno, getErrno)
 import Foreign.C.Types (CInt(..), CSize(..))
-import Foreign.ForeignPtr (mallocForeignPtrBytes, withForeignPtr)
+import Foreign.ForeignPtr (ForeignPtr, mallocForeignPtrBytes, withForeignPtr)
 import Foreign.Marshal (alloca, allocaBytes)
 import Foreign.Marshal.Array (allocaArray)
 import Foreign.Ptr (castPtr)
@@ -124,6 +124,10 @@ newControl shouldRegister = allocaArray 2 $ \fds -> do
 -- the RTS, then *BEFORE* the wakeup file is closed, we must call
 -- c_setIOManagerWakeupFd (-1), so that the RTS does not try to use the wakeup
 -- file after it has been closed.
+--
+-- Note, however, that even if we do the above, this function is still racy
+-- since we do not synchronize between here and ioManagerWakeup.
+-- ioManagerWakeup ignores failures that arise from this case.
 closeControl :: Control -> IO ()
 closeControl w = do
   _ <- atomicSwapIORef (controlIsDead w) True
@@ -142,6 +146,10 @@ io_MANAGER_WAKEUP, io_MANAGER_DIE :: Word8
 io_MANAGER_WAKEUP = 0xff
 io_MANAGER_DIE    = 0xfe
 
+#if !defined(HAVE_SIGNAL_H)
+readControlMessage :: Control -> Fd -> IO ControlMessage
+readControlMessage _ _ = errorWithoutStackTrace "readControlMessage"
+#else
 foreign import ccall "__hscore_sizeof_siginfo_t"
     sizeof_siginfo_t :: CSize
 
@@ -176,6 +184,7 @@ readControlMessage ctrl fd
             8
 #else
             4096
+#endif
 #endif
 
 sendWakeup :: Control -> IO ()
@@ -226,5 +235,10 @@ foreign import ccall unsafe "sys/eventfd.h eventfd_write"
    c_eventfd_write :: CInt -> CULLong -> IO CInt
 #endif
 
+#if defined(wasm32_HOST_ARCH)
+c_setIOManagerWakeupFd :: CInt -> IO ()
+c_setIOManagerWakeupFd _ = pure ()
+#else
 foreign import ccall unsafe "setIOManagerWakeupFd"
    c_setIOManagerWakeupFd :: CInt -> IO ()
+#endif

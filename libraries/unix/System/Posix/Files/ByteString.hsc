@@ -1,9 +1,6 @@
-#if __GLASGOW_HASKELL__ >= 709
 {-# LANGUAGE Safe #-}
-#else
-{-# LANGUAGE Trustworthy #-}
-#endif
 {-# LANGUAGE CApiFFI #-}
+{-# LANGUAGE PatternSynonyms #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -63,6 +60,73 @@ module System.Posix.Files.ByteString (
     isBlockDevice, isCharacterDevice, isNamedPipe, isRegularFile,
     isDirectory, isSymbolicLink, isSocket,
 
+    fileBlockSize,
+    fileBlocks,
+
+    -- * Extended file status
+    ExtendedFileStatus(..),
+    CAttributes(..),
+    haveStatx,
+    -- ** Obtaining extended file status
+    getExtendedFileStatus,
+    -- ** Flags
+    StatxFlags(..),
+    defaultStatxFlags,
+    pattern EmptyPath,
+    pattern NoAutoMount,
+    pattern SymlinkNoFollow,
+    pattern SyncAsStat,
+    pattern ForceSync,
+    pattern DontSync,
+    -- ** Mask
+    StatxMask(..),
+    defaultStatxMask,
+    pattern StatxType,
+    pattern StatxMode,
+    pattern StatxNlink,
+    pattern StatxUid,
+    pattern StatxGid,
+    pattern StatxAtime,
+    pattern StatxMtime,
+    pattern StatxCtime,
+    pattern StatxIno,
+    pattern StatxSize,
+    pattern StatxBlocks,
+    pattern StatxBasicStats,
+    pattern StatxBtime,
+    pattern StatxMntId,
+    pattern StatxAll,
+    -- ** Querying extended file status
+    fileBlockSizeX,
+    linkCountX,
+    fileOwnerX,
+    fileGroupX,
+    fileModeX,
+    fileIDX,
+    fileSizeX,
+    fileBlocksX,
+    accessTimeHiResX,
+    creationTimeHiResX,
+    statusChangeTimeHiResX,
+    modificationTimeHiResX,
+    deviceIDX,
+    specialDeviceIDX,
+    mountIDX,
+    fileCompressedX,
+    fileImmutableX,
+    fileAppendX,
+    fileNoDumpX,
+    fileEncryptedX,
+    fileVerityX,
+    fileDaxX,
+    isBlockDeviceX,
+    isCharacterDeviceX,
+    isNamedPipeX,
+    isRegularFileX,
+    isDirectoryX,
+    isSymbolicLinkX,
+    isSocketX,
+
     -- * Creation
     createNamedPipe,
     createDevice,
@@ -109,6 +173,11 @@ import System.Posix.Files.Common
 import System.Posix.ByteString.FilePath
 
 import Data.Time.Clock.POSIX (POSIXTime)
+
+#if !defined(HAVE_MKNOD) || !defined(HAVE_CHOWN)
+import System.IO.Error ( ioeSetLocation )
+import GHC.IO.Exception ( unsupportedOperation )
+#endif
 
 -- -----------------------------------------------------------------------------
 -- chmod()
@@ -180,6 +249,25 @@ getFileStatus path = do
       throwErrnoPathIfMinus1Retry_ "getFileStatus" path (c_stat s p)
   return (FileStatus fp)
 
+-- | Gets extended file status information.
+--
+-- The target file to open is identified in one of the following ways:
+--
+-- - If @pathname@ begins with a slash, then it is an absolute pathname that identifies the target file. In this case, @dirfd@ is ignored
+-- - If @pathname@ is a string that begins with a character other than a slash and @dirfd@ is a file descriptor that refers to a
+--   directory, then pathname is a relative pathname that is interpreted relative to the directory referred to by dirfd.
+--   (See @openat(2)@ for an explanation of why this is useful.)
+-- - If @pathname@ is an empty string and the 'EmptyPath' flag is specified in flags (see below), then the target file is
+--   the one referred to by the file descriptor @dirfd@.
+--
+-- Note: calls @statx@.
+getExtendedFileStatus :: Maybe Fd     -- ^ Optional directory file descriptor (@dirfd@)
+                      -> RawFilePath  -- ^ @pathname@ to open
+                      -> StatxFlags   -- ^ flags
+                      -> StatxMask    -- ^ mask
+                      -> IO ExtendedFileStatus
+getExtendedFileStatus mfd path flags masks = withFilePath path $ \s -> getExtendedFileStatus_ mfd s flags masks
+
 -- | Acts as 'getFileStatus' except when the 'RawFilePath' refers to a symbolic
 -- link. In that case the @FileStatus@ information of the symbolic link itself
 -- is returned instead of that of the file it points to.
@@ -208,6 +296,14 @@ createNamedPipe name mode = do
   withFilePath name $ \s ->
     throwErrnoPathIfMinus1_ "createNamedPipe" name (c_mkfifo s mode)
 
+#if !defined(HAVE_MKNOD)
+
+{-# WARNING createDevice "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_MKNOD@)" #-}
+createDevice :: RawFilePath -> FileMode -> DeviceID -> IO ()
+createDevice _ _ _ = ioError (ioeSetLocation unsupportedOperation "createDevice")
+
+#else
+
 -- | @createDevice path mode dev@ creates either a regular or a special file
 -- depending on the value of @mode@ (and @dev@).  @mode@ will normally be either
 -- 'blockSpecialMode' or 'characterSpecialMode'.  May fail with
@@ -224,6 +320,8 @@ createDevice path mode dev =
 foreign import capi unsafe "HsUnix.h mknod"
   c_mknod :: CString -> CMode -> CDev -> IO CInt
 
+#endif // HAVE_MKNOD
+
 -- -----------------------------------------------------------------------------
 -- Hard links
 
@@ -235,7 +333,7 @@ createLink :: RawFilePath -> RawFilePath -> IO ()
 createLink name1 name2 =
   withFilePath name1 $ \s1 ->
   withFilePath name2 $ \s2 ->
-  throwErrnoPathIfMinus1_ "createLink" name1 (c_link s1 s2)
+  throwErrnoTwoPathsIfMinus1_ "createLink" name1 name2 (c_link s1 s2)
 
 -- | @removeLink path@ removes the link named @path@.
 --
@@ -256,10 +354,10 @@ removeLink name =
 --
 -- Note: calls @symlink@.
 createSymbolicLink :: RawFilePath -> RawFilePath -> IO ()
-createSymbolicLink file1 file2 =
-  withFilePath file1 $ \s1 ->
-  withFilePath file2 $ \s2 ->
-  throwErrnoPathIfMinus1_ "createSymbolicLink" file2 (c_symlink s1 s2)
+createSymbolicLink name1 name2 =
+  withFilePath name1 $ \s1 ->
+  withFilePath name2 $ \s2 ->
+  throwErrnoTwoPathsIfMinus1_ "createSymbolicLink" name1 name2 (c_symlink s1 s2)
 
 foreign import ccall unsafe "symlink"
   c_symlink :: CString -> CString -> IO CInt
@@ -297,13 +395,15 @@ rename :: RawFilePath -> RawFilePath -> IO ()
 rename name1 name2 =
   withFilePath name1 $ \s1 ->
   withFilePath name2 $ \s2 ->
-  throwErrnoPathIfMinus1_ "rename" name1 (c_rename s1 s2)
+  throwErrnoTwoPathsIfMinus1_ "rename" name1 name2 (c_rename s1 s2)
 
 foreign import ccall unsafe "rename"
    c_rename :: CString -> CString -> IO CInt
 
 -- -----------------------------------------------------------------------------
 -- chown()
+
+#if defined(HAVE_CHOWN)
 
 -- | @setOwnerAndGroup path uid gid@ changes the owner and group of @path@ to
 -- @uid@ and @gid@, respectively.
@@ -318,6 +418,14 @@ setOwnerAndGroup name uid gid = do
 
 foreign import ccall unsafe "chown"
   c_chown :: CString -> CUid -> CGid -> IO CInt
+
+#else
+
+{-# WARNING setOwnerAndGroup "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_CHOWN@)" #-}
+setOwnerAndGroup :: RawFilePath -> UserID -> GroupID -> IO ()
+setOwnerAndGroup _ _ _ = ioError (ioeSetLocation unsupportedOperation "setOwnerAndGroup")
+
+#endif // HAVE_CHOWN
 
 #if HAVE_LCHOWN
 -- | Acts as 'setOwnerAndGroup' but does not follow symlinks (and thus
@@ -351,9 +459,18 @@ setFileTimes name atime mtime = do
 
 -- | Like 'setFileTimes' but timestamps can have sub-second resolution.
 --
--- Note: calls @utimensat@ or @utimes@.
+-- Note: calls @utimensat@ or @utimes@. Support for high resolution timestamps
+--   is filesystem dependent with the following limitations:
+--
+-- - HFS+ volumes on OS X truncate the sub-second part of the timestamp.
+--
 setFileTimesHiRes :: RawFilePath -> POSIXTime -> POSIXTime -> IO ()
-#ifdef HAVE_UTIMENSAT
+#if defined(javascript_HOST_ARCH)
+setFileTimesHiRes name atime mtime =
+  withFilePath name $ \s ->
+    throwErrnoPathIfMinus1_ "setFileTimesHiRes" name $
+      js_utimes s (realToFrac atime) (realToFrac mtime)
+#elif defined(HAVE_UTIMENSAT)
 setFileTimesHiRes name atime mtime =
   withFilePath name $ \s ->
     withArray [toCTimeSpec atime, toCTimeSpec mtime] $ \times ->
@@ -370,9 +487,18 @@ setFileTimesHiRes name atime mtime =
 -- This operation is not supported on all platforms. On these platforms,
 -- this function will raise an exception.
 --
--- Note: calls @utimensat@ or @lutimes@.
+-- Note: calls @utimensat@ or @lutimes@. Support for high resolution timestamps
+--   is filesystem dependent with the following limitations:
+--
+-- - HFS+ volumes on OS X truncate the sub-second part of the timestamp.
+--
 setSymbolicLinkTimesHiRes :: RawFilePath -> POSIXTime -> POSIXTime -> IO ()
-#if HAVE_UTIMENSAT
+#if defined(javascript_HOST_ARCH)
+setSymbolicLinkTimesHiRes name atime mtime =
+  withFilePath name $ \s ->
+    throwErrnoPathIfMinus1_ "setSymbolicLinkTimesHiRes" name $
+      js_lutimes s (realToFrac atime) (realToFrac mtime)
+#elif HAVE_UTIMENSAT
 setSymbolicLinkTimesHiRes name atime mtime =
   withFilePath name $ \s ->
     withArray [toCTimeSpec atime, toCTimeSpec mtime] $ \times ->
@@ -385,6 +511,7 @@ setSymbolicLinkTimesHiRes name atime mtime =
       throwErrnoPathIfMinus1_ "setSymbolicLinkTimesHiRes" name $
         c_lutimes s times
 #else
+{-# WARNING setSymbolicLinkTimesHiRes "setSymbolicLinkTimesHiRes: not available on this platform" #-}
 setSymbolicLinkTimesHiRes =
   error "setSymbolicLinkTimesHiRes: not available on this platform"
 #endif
@@ -404,11 +531,16 @@ touchFile name = do
 --
 -- Note: calls @lutimes@.
 touchSymbolicLink :: RawFilePath -> IO ()
-#if HAVE_LUTIMES
+#if defined(javascript_HOST_ARCH)
+touchSymbolicLink name =
+  withFilePath name $ \s ->
+    throwErrnoPathIfMinus1_ "touchSymbolicLink" name (js_lutimes s (-1) (-1))
+#elif HAVE_LUTIMES
 touchSymbolicLink name =
   withFilePath name $ \s ->
     throwErrnoPathIfMinus1_ "touchSymbolicLink" name (c_lutimes s nullPtr)
 #else
+{-# WARNING touchSymbolicLink "touchSymbolicLink: not available on this platform" #-}
 touchSymbolicLink =
   error "touchSymbolicLink: not available on this platform"
 #endif

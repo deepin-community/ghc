@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE Trustworthy #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -24,6 +25,7 @@ import Control.Monad
 import Data.Int
 import Data.Word
 import GHC.Base
+import GHC.Generics (Generic)
 import GHC.Read ( Read )
 import GHC.Show ( Show )
 import GHC.IO.Exception
@@ -103,10 +105,27 @@ data RTSStats = RTSStats {
     -- | Total elapsed time (at the previous GC)
   , elapsed_ns :: RtsTime
 
+    -- | The total CPU time used during the post-mark pause phase of the
+    -- concurrent nonmoving GC.
+  , nonmoving_gc_sync_cpu_ns :: RtsTime
+    -- | The total time elapsed during the post-mark pause phase of the
+    -- concurrent nonmoving GC.
+  , nonmoving_gc_sync_elapsed_ns :: RtsTime
+    -- | The maximum elapsed length of any post-mark pause phase of the
+    -- concurrent nonmoving GC.
+  , nonmoving_gc_sync_max_elapsed_ns :: RtsTime
+    -- | The total CPU time used by the nonmoving GC.
+  , nonmoving_gc_cpu_ns :: RtsTime
+    -- | The total time elapsed during which there is a nonmoving GC active.
+  , nonmoving_gc_elapsed_ns :: RtsTime
+    -- | The maximum time elapsed during any nonmoving GC cycle.
+  , nonmoving_gc_max_elapsed_ns :: RtsTime
+
     -- | Details about the most recent GC
   , gc :: GCDetails
   } deriving ( Read -- ^ @since 4.10.0.0
              , Show -- ^ @since 4.10.0.0
+             , Generic -- ^ @since 4.15.0.0
              )
 
 --
@@ -121,7 +140,7 @@ data GCDetails = GCDetails {
   , gcdetails_threads :: Word32
     -- | Number of bytes allocated since the previous GC
   , gcdetails_allocated_bytes :: Word64
-    -- | Total amount of live data in the heap (incliudes large + compact data).
+    -- | Total amount of live data in the heap (includes large + compact data).
     -- Updated after every GC. Data in uncollected generations (in minor GCs)
     -- are considered live.
   , gcdetails_live_bytes :: Word64
@@ -140,14 +159,28 @@ data GCDetails = GCDetails {
   , gcdetails_par_max_copied_bytes :: Word64
     -- | In parallel GC, the amount of balanced data copied by all threads
   , gcdetails_par_balanced_copied_bytes :: Word64
+    -- | The amount of memory lost due to block fragmentation in bytes.
+    -- Block fragmentation is the difference between the amount of blocks retained by the RTS and the blocks that are in use.
+    -- This occurs when megablocks are only sparsely used, eg, when data that cannot be moved retains a megablock.
+    --
+    -- @since 4.18.0.0
+  , gcdetails_block_fragmentation_bytes :: Word64
     -- | The time elapsed during synchronisation before GC
   , gcdetails_sync_elapsed_ns :: RtsTime
     -- | The CPU time used during GC itself
   , gcdetails_cpu_ns :: RtsTime
     -- | The time elapsed during GC itself
   , gcdetails_elapsed_ns :: RtsTime
+
+    -- | The CPU time used during the post-mark pause phase of the concurrent
+    -- nonmoving GC.
+  , gcdetails_nonmoving_gc_sync_cpu_ns :: RtsTime
+    -- | The time elapsed during the post-mark pause phase of the concurrent
+    -- nonmoving GC.
+  , gcdetails_nonmoving_gc_sync_elapsed_ns :: RtsTime
   } deriving ( Read -- ^ @since 4.10.0.0
              , Show -- ^ @since 4.10.0.0
+             , Generic -- ^ @since 4.15.0.0
              )
 
 -- | Time values from the RTS, using a fixed resolution of nanoseconds.
@@ -192,6 +225,12 @@ getRTSStats = do
     gc_elapsed_ns <- (# peek RTSStats, gc_elapsed_ns) p
     cpu_ns <- (# peek RTSStats, cpu_ns) p
     elapsed_ns <- (# peek RTSStats, elapsed_ns) p
+    nonmoving_gc_sync_cpu_ns <- (# peek RTSStats, nonmoving_gc_sync_cpu_ns) p
+    nonmoving_gc_sync_elapsed_ns <- (# peek RTSStats, nonmoving_gc_sync_elapsed_ns) p
+    nonmoving_gc_sync_max_elapsed_ns <- (# peek RTSStats, nonmoving_gc_sync_max_elapsed_ns) p
+    nonmoving_gc_cpu_ns <- (# peek RTSStats, nonmoving_gc_cpu_ns) p
+    nonmoving_gc_elapsed_ns <- (# peek RTSStats, nonmoving_gc_elapsed_ns) p
+    nonmoving_gc_max_elapsed_ns <- (# peek RTSStats, nonmoving_gc_max_elapsed_ns) p
     let pgc = (# ptr RTSStats, gc) p
     gc <- do
       gcdetails_gen <- (# peek GCDetails, gen) pgc
@@ -208,8 +247,12 @@ getRTSStats = do
         (# peek GCDetails, par_max_copied_bytes) pgc
       gcdetails_par_balanced_copied_bytes <-
         (# peek GCDetails, par_balanced_copied_bytes) pgc
+      gcdetails_block_fragmentation_bytes <-
+        (# peek GCDetails, block_fragmentation_bytes) pgc
       gcdetails_sync_elapsed_ns <- (# peek GCDetails, sync_elapsed_ns) pgc
       gcdetails_cpu_ns <- (# peek GCDetails, cpu_ns) pgc
       gcdetails_elapsed_ns <- (# peek GCDetails, elapsed_ns) pgc
+      gcdetails_nonmoving_gc_sync_cpu_ns <- (# peek GCDetails, nonmoving_gc_sync_cpu_ns) pgc
+      gcdetails_nonmoving_gc_sync_elapsed_ns <- (# peek GCDetails, nonmoving_gc_sync_elapsed_ns) pgc
       return GCDetails{..}
     return RTSStats{..}

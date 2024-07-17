@@ -1,6 +1,6 @@
 #if __GLASGOW_HASKELL__ >= 709
 {-# LANGUAGE Safe #-}
-#elif __GLASGOW_HASKELL__ >= 701
+#else
 {-# LANGUAGE Trustworthy #-}
 #endif
 -----------------------------------------------------------------------------
@@ -16,31 +16,72 @@
 -- A collection of FFI declarations for using Windows DebugApi.
 --
 -----------------------------------------------------------------------------
-module System.Win32.DebugApi where
+module System.Win32.DebugApi
+    ( PID, TID, DebugEventId, ForeignAddress
+    , PHANDLE, THANDLE
+    , ThreadInfo
+    , ImageInfo
+    , ExceptionInfo
+    , Exception(..)
+    , DebugEventInfo(..)
+    , DebugEvent
 
+    , debugBreak
+    , isDebuggerPresent
+
+      -- * Debug events
+    , waitForDebugEvent
+    , getDebugEvents
+    , continueDebugEvent
+
+      -- * Debugging another process
+    , debugActiveProcess
+    , peekProcessMemory
+    , readProcessMemory
+    , pokeProcessMemory
+    , withProcessMemory
+    , peekP
+    , pokeP
+
+      -- * Thread control
+    , suspendThread
+    , resumeThread
+    , withSuspendedThread
+
+      -- * Thread register control
+    , getThreadContext
+    , setThreadContext
+    , useAllRegs
+    , withThreadContext
+
+#if __i386__
+    , eax, ebx, ecx, edx, esi, edi, ebp, eip, esp
+#elif __x86_64__
+    , rax, rbx, rcx, rdx, rsi, rdi, rbp, rip, rsp
+#endif
+    , segCs, segDs, segEs, segFs, segGs
+    , eFlags
+    , dr
+    , setReg, getReg, modReg
+    , makeModThreadContext
+    , modifyThreadContext
+
+      -- * Sending debug output to another process
+    , outputDebugString
+    ) where
+
+import System.Win32.DebugApi.Internal
 import Control.Exception( bracket_ )
-import Data.Word        ( Word8, Word32 )
 import Foreign          ( Ptr, nullPtr, ForeignPtr, mallocForeignPtrBytes
                         , peekByteOff, plusPtr, allocaBytes, castPtr, poke
                         , withForeignPtr, Storable, sizeOf, peek, pokeByteOff )
 import System.IO        ( fixIO )
-import System.Win32.Types   ( HANDLE, BOOL, WORD, DWORD, failIf_, failWith
-                            , getLastError, failIf, LPTSTR, withTString )
+import System.Win32.Types   ( WORD, DWORD, failIf_, failWith
+                            , getLastError, failIf, withTString )
 
 ##include "windows_cconv.h"
 #include "windows.h"
 
-type PID = DWORD
-type TID = DWORD
-type DebugEventId = (PID, TID)
-type ForeignAddress = Word32
-
-type PHANDLE = Ptr ()
-type THANDLE = Ptr ()
-
-type ThreadInfo = (THANDLE, ForeignAddress, ForeignAddress)   -- handle to thread, thread local, thread start
-type ImageInfo = (HANDLE, ForeignAddress, DWORD, DWORD, ForeignAddress)
-type ExceptionInfo = (Bool, Bool, ForeignAddress) -- First chance, continuable, address
 
 
 data Exception
@@ -66,7 +107,7 @@ data Exception
     | SingleStep
     | StackOverflow
     deriving (Show)
-    
+
 data DebugEventInfo
     = UnknownDebugEvent
     | Exception         ExceptionInfo Exception
@@ -94,7 +135,7 @@ peekDebugEvent p = do
     where
         dwZero = 0 :: DWORD
         wZero = 0 :: WORD
-        
+
         rest (#const EXCEPTION_DEBUG_EVENT) p' = do
             chance  <- (#peek EXCEPTION_DEBUG_INFO, dwFirstChance) p'
             flags   <- (#peek EXCEPTION_RECORD, ExceptionFlags) p'
@@ -121,7 +162,7 @@ peekDebugEvent p = do
                 (#const EXCEPTION_PRIV_INSTRUCTION)         -> return PrivilegedInstruction
                 (#const EXCEPTION_SINGLE_STEP)              -> return SingleStep
                 (#const EXCEPTION_STACK_OVERFLOW)           -> return StackOverflow
-                _                                           -> return UnknownException 
+                _                                           -> return UnknownException
             return $ Exception (chance/=dwZero, flags==dwZero, addr) e
 
         rest (#const CREATE_THREAD_DEBUG_EVENT) p' = do
@@ -141,16 +182,16 @@ peekDebugEvent p = do
             start   <- (#peek CREATE_PROCESS_DEBUG_INFO, lpStartAddress) p'
             imgname <- (#peek CREATE_PROCESS_DEBUG_INFO, lpImageName) p'
             --unicode <- (#peek CREATE_PROCESS_DEBUG_INFO, fUnicode) p'
-            return $ CreateProcess proc 
+            return $ CreateProcess proc
                         (file, imgbase, dbgoff, dbgsize, imgname) --, unicode/=wZero)
                         (thread, local, start)
-        
+
         rest (#const EXIT_THREAD_DEBUG_EVENT) p' =
             (#peek EXIT_THREAD_DEBUG_INFO, dwExitCode) p' >>= return.ExitThread
-        
+
         rest (#const EXIT_PROCESS_DEBUG_EVENT) p' =
             (#peek EXIT_PROCESS_DEBUG_INFO, dwExitCode) p' >>= return.ExitProcess
-        
+
         rest (#const LOAD_DLL_DEBUG_EVENT) p' = do
             file    <- (#peek LOAD_DLL_DEBUG_INFO, hFile) p'
             imgbase <- (#peek LOAD_DLL_DEBUG_INFO, lpBaseOfDll) p'
@@ -158,7 +199,7 @@ peekDebugEvent p = do
             dbgsize <- (#peek LOAD_DLL_DEBUG_INFO, nDebugInfoSize) p'
             imgname <- (#peek LOAD_DLL_DEBUG_INFO, lpImageName) p'
             --unicode <- (#peek LOAD_DLL_DEBUG_INFO, fUnicode) p'
-            return $ 
+            return $
                 LoadDll (file, imgbase, dbgoff, dbgsize, imgname)--, unicode/=wZero)
 
         rest (#const OUTPUT_DEBUG_STRING_EVENT) p' = do
@@ -166,7 +207,7 @@ peekDebugEvent p = do
             unicode <- (#peek OUTPUT_DEBUG_STRING_INFO, fUnicode) p'
             len     <- (#peek OUTPUT_DEBUG_STRING_INFO, nDebugStringLength) p'
             return $ DebugString dat (unicode/=wZero) len
-        
+
         rest (#const UNLOAD_DLL_DEBUG_EVENT) p' =
             (#peek UNLOAD_DLL_DEBUG_INFO, lpBaseOfDll) p' >>= return.UnloadDll
 
@@ -339,7 +380,7 @@ dr n = case n of
     6 -> (#offset CONTEXT, Dr6)
     7 -> (#offset CONTEXT, Dr7)
     _ -> undefined
-    
+
 setReg :: Ptr a -> Int -> DWORD -> IO ()
 setReg = pokeByteOff
 
@@ -364,48 +405,3 @@ modifyThreadContext t a = withThreadContext t $ makeModThreadContext a
 outputDebugString :: String -> IO ()
 outputDebugString s = withTString s $ \c_s -> c_OutputDebugString c_s
 
---------------------------------------------------------------------------
--- Raw imports
-
-foreign import WINDOWS_CCONV "windows.h SuspendThread"
-    c_SuspendThread :: THANDLE -> IO DWORD
-
-foreign import WINDOWS_CCONV "windows.h ResumeThread"
-    c_ResumeThread :: THANDLE -> IO DWORD
-
-foreign import WINDOWS_CCONV "windows.h WaitForDebugEvent"
-    c_WaitForDebugEvent :: Ptr () -> DWORD -> IO BOOL
-
-foreign import WINDOWS_CCONV "windows.h ContinueDebugEvent"
-    c_ContinueDebugEvent :: DWORD -> DWORD -> DWORD -> IO BOOL
-
-foreign import WINDOWS_CCONV "windows.h DebugActiveProcess"
-    c_DebugActiveProcess :: DWORD -> IO Bool
-    
--- Windows XP
--- foreign import WINDOWS_CCONV "windows.h DebugActiveProcessStop"
---     c_DebugActiveProcessStop :: DWORD -> IO Bool
-
-foreign import WINDOWS_CCONV "windows.h ReadProcessMemory" c_ReadProcessMemory :: 
-    PHANDLE -> Ptr () -> Ptr Word8 -> DWORD -> Ptr DWORD -> IO BOOL
-
-foreign import WINDOWS_CCONV "windows.h WriteProcessMemory" c_WriteProcessMemory ::
-    PHANDLE -> Ptr () -> Ptr Word8 -> DWORD -> Ptr DWORD -> IO BOOL
-
-foreign import WINDOWS_CCONV "windows.h GetThreadContext"
-    c_GetThreadContext :: THANDLE -> Ptr () -> IO BOOL
-
-foreign import WINDOWS_CCONV "windows.h SetThreadContext"
-    c_SetThreadContext :: THANDLE -> Ptr () -> IO BOOL
-
---foreign import WINDOWS_CCONV "windows.h GetThreadId"
---    c_GetThreadId :: THANDLE -> IO TID
-
-foreign import WINDOWS_CCONV "windows.h OutputDebugStringW"
-    c_OutputDebugString :: LPTSTR -> IO ()
-
-foreign import WINDOWS_CCONV "windows.h IsDebuggerPresent"
-    isDebuggerPresent :: IO BOOL
-
-foreign import WINDOWS_CCONV "windows.h  DebugBreak"
-    debugBreak :: IO ()

@@ -1,10 +1,6 @@
 {-# LANGUAGE CApiFFI #-}
 {-# LANGUAGE NondecreasingIndentation #-}
-#if __GLASGOW_HASKELL__ >= 709
 {-# LANGUAGE Safe #-}
-#else
-{-# LANGUAGE Trustworthy #-}
-#endif
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  System.Posix.Unistd
@@ -156,6 +152,7 @@ foreign import ccall safe "usleep"
 -- /GHC Note/: the comment for 'usleep' also applies here.
 nanosleep :: Integer -> IO ()
 #ifndef HAVE_NANOSLEEP
+{-# WARNING nanosleep "nanosleep: not available on this platform" #-}
 nanosleep = error "nanosleep: not available on this platform"
 #else
 nanosleep 0 = return ()

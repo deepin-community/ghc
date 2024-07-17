@@ -1,5 +1,8 @@
 {-# LANGUAGE Trustworthy #-}
 {-# LANGUAGE CPP, NoImplicitPrelude, ScopedTypeVariables, BangPatterns #-}
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE StandaloneDeriving #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -42,6 +45,7 @@ import GHC.Word
 import GHC.Ptr
 import GHC.Base
 import GHC.Fingerprint.Type
+import Foreign.C.ConstPtr
 import Data.Bits
 import GHC.Real
 
@@ -84,7 +88,9 @@ class Storable a where
    alignment   :: a -> Int
    -- ^ Computes the alignment constraint of the argument.  An
    -- alignment constraint @x@ is fulfilled by any address divisible
-   -- by @x@.  The value of the argument is not used.
+   -- by @x@. The alignment must be a power of two if this instance
+   -- is to be used with 'alloca' or 'allocaArray'.  The value of
+   -- the argument is not used.
 
    peekElemOff :: Ptr a -> Int      -> IO a
    -- ^       Read a value from a memory area regarded as an array
@@ -278,3 +284,5 @@ pokeFingerprint p0 (Fingerprint high low) = do
 
       pokeW64 (castPtr p0) 8 high
       pokeW64 (castPtr p0 `plusPtr` 8) 8 low
+
+deriving newtype instance Storable (ConstPtr a)

@@ -6,11 +6,10 @@
 // The files in ELFRelocs/ have been taken from
 // the LLVM project. See ELFRelocs/LICENSE-LLVM.TXT
 // for the University of Illinois Open Source License
-// under which it is distrubuted.
+// under which it is distributed.
 //
 
-#ifndef RTS_ELF_COMPAT_H
-#define RTS_ELF_COMPAT_H
+#pragma once
 
 #define PASTE(x,y) x ## y
 #define EVAL(x,y) PASTE(x,y)
@@ -31,5 +30,3 @@ enum Reloci386 {
 enum RelocX86_64 {
 #include "ELFRelocs/x86_64.def"
 };
-
-#endif //RTS_ELF_COMPAT_H

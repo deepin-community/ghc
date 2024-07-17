@@ -1,8 +1,4 @@
-#if __GLASGOW_HASKELL__ >= 709
 {-# LANGUAGE Safe #-}
-#else
-{-# LANGUAGE Trustworthy #-}
-#endif
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  System.Posix.SharedMem
@@ -24,7 +20,9 @@ module System.Posix.SharedMem
 #include "HsUnix.h"
 
 #include <sys/types.h>
+#if defined(HAVE_SHM_OPEN) || defined(HAVE_SHM_UNLINK)
 #include <sys/mman.h>
+#endif
 #include <fcntl.h>
 
 import System.Posix.Types
@@ -67,6 +65,7 @@ shmOpen name flags mode =
                        shm_open cname cflags mode
                  return $ Fd fd
 #else
+{-# WARNING shmOpen "System.Posix.SharedMem: shm_open: not available" #-}
 shmOpen = error "System.Posix.SharedMem:shm_open: not available"
 #endif
 
@@ -77,6 +76,7 @@ shmUnlink name = withCAString name shmUnlink'
     where shmUnlink' cname =
               throwErrnoIfMinus1_ "shmUnlink" $ shm_unlink cname
 #else
+{-# WARNING shmUnlink "System.Posix.SharedMem:shm_unlink: not available" #-}
 shmUnlink = error "System.Posix.SharedMem:shm_unlink: not available"
 #endif
 

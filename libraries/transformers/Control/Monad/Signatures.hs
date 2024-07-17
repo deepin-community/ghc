@@ -27,7 +27,7 @@ module Control.Monad.Signatures (
 -- introduced in "Control.Monad.Trans.Cont".
 -- Any lifting function @liftCallCC@ should satisfy
 --
--- * @'lift' (f k) = f' ('lift' . k) => 'lift' (cf f) = liftCallCC cf f'@
+-- * @'Control.Monad.Trans.Class.lift' (f k) = f' ('Control.Monad.Trans.Class.lift' . k) => 'Control.Monad.Trans.Class.lift' (cf f) = liftCallCC cf f'@
 --
 type CallCC m a b = ((a -> m b) -> m a) -> m a
 
@@ -35,7 +35,7 @@ type CallCC m a b = ((a -> m b) -> m a) -> m a
 -- introduced in "Control.Monad.Trans.Except".
 -- Any lifting function @liftCatch@ should satisfy
 --
--- * @'lift' (cf m f) = liftCatch ('lift' . cf) ('lift' f)@
+-- * @'Control.Monad.Trans.Class.lift' (cf m f) = liftCatch ('Control.Monad.Trans.Class.lift' . cf) ('Control.Monad.Trans.Class.lift' f)@
 --
 type Catch e m a = m a -> (e -> m a) -> m a
 
@@ -43,7 +43,7 @@ type Catch e m a = m a -> (e -> m a) -> m a
 -- introduced in "Control.Monad.Trans.Writer".
 -- Any lifting function @liftListen@ should satisfy
 --
--- * @'lift' . liftListen = liftListen . 'lift'@
+-- * @'Control.Monad.Trans.Class.lift' . liftListen = liftListen . 'Control.Monad.Trans.Class.lift'@
 --
 type Listen w m a = m a -> m (a, w)
 
@@ -51,6 +51,6 @@ type Listen w m a = m a -> m (a, w)
 -- introduced in "Control.Monad.Trans.Writer".
 -- Any lifting function @liftPass@ should satisfy
 --
--- * @'lift' . liftPass = liftPass . 'lift'@
+-- * @'Control.Monad.Trans.Class.lift' . liftPass = liftPass . 'Control.Monad.Trans.Class.lift'@
 --
 type Pass w m a =  m (a, w -> w) -> m a

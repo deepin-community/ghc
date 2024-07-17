@@ -3,7 +3,7 @@
 
    Our low-level exec() variant.
 
-   Note: __hsunix_execvpe() is very similiar to the function
+   Note: __hsunix_execvpe() is very similar to the function
          execvpe(3) as provided by glibc 2.11 and later. However, if
          execvpe(3) is available, we use that instead.
 
@@ -22,7 +22,6 @@
 #include <string.h>
 #include <errno.h>
 
-#define HSUNIX_EXECVPE_H_NO_COMPAT
 #include "execvpe.h"
 
 #if !defined(execvpe) && !HAVE_DECL_EXECVPE
@@ -72,6 +71,9 @@ __hsunix_execvpe(const char *name, char *const argv[], char *const envp[])
 {
 #if HAVE_EXECVPE
     return execvpe(name, argv, envp);
+#elif !defined(HAVE_EXECV)
+    errno = ENOSYS;
+    return (-1);
 #else
     register int lp, ln;
     register char *p;

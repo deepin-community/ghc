@@ -1,4 +1,4 @@
-{-# LANGUAGE CPP #-}
+{-# LANGUAGE Safe #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -30,25 +30,24 @@ module Control.Monad.Writer.Class (
     censor,
   ) where
 
-import Control.Monad.Trans.Error as Error
-import Control.Monad.Trans.Except as Except
-import Control.Monad.Trans.Identity as Identity
-import Control.Monad.Trans.Maybe as Maybe
-import Control.Monad.Trans.Reader
-import qualified Control.Monad.Trans.RWS.Lazy as LazyRWS (
-        RWST, writer, tell, listen, pass)
-import qualified Control.Monad.Trans.RWS.Strict as StrictRWS (
-        RWST, writer, tell, listen, pass)
-import Control.Monad.Trans.State.Lazy as Lazy
-import Control.Monad.Trans.State.Strict as Strict
-import qualified Control.Monad.Trans.Writer.Lazy as Lazy (
-        WriterT, writer, tell, listen, pass)
-import qualified Control.Monad.Trans.Writer.Strict as Strict (
-        WriterT, writer, tell, listen, pass)
-
+import Control.Monad.Trans.Except (ExceptT)
+import qualified Control.Monad.Trans.Except as Except
+import Control.Monad.Trans.Identity (IdentityT)
+import qualified Control.Monad.Trans.Identity as Identity
+import Control.Monad.Trans.Maybe (MaybeT)
+import qualified Control.Monad.Trans.Maybe as Maybe
+import Control.Monad.Trans.Reader (ReaderT, mapReaderT)
+import qualified Control.Monad.Trans.RWS.Lazy as LazyRWS 
+import qualified Control.Monad.Trans.RWS.Strict as StrictRWS 
+import qualified Control.Monad.Trans.State.Lazy as Lazy
+import qualified Control.Monad.Trans.State.Strict as Strict
+import qualified Control.Monad.Trans.Writer.Lazy as Lazy
+import qualified Control.Monad.Trans.Writer.Strict as Strict 
+import Control.Monad.Trans.Accum (AccumT)
+import qualified Control.Monad.Trans.Accum as Accum
+import qualified Control.Monad.Trans.RWS.CPS as CPSRWS
+import qualified Control.Monad.Trans.Writer.CPS as CPS
 import Control.Monad.Trans.Class (lift)
-import Control.Monad
-import Data.Monoid
 
 -- ---------------------------------------------------------------------------
 -- MonadWriter class
@@ -63,9 +62,7 @@ import Data.Monoid
 -- the written object.
 
 class (Monoid w, Monad m) => MonadWriter w m | m -> w where
-#if __GLASGOW_HASKELL__ >= 707
     {-# MINIMAL (writer | tell), listen, pass #-}
-#endif
     -- | @'writer' (a,w)@ embeds a simple writer action.
     writer :: (a,w) -> m a
     writer ~(a, w) = do
@@ -103,16 +100,19 @@ censor f m = pass $ do
     a <- m
     return (a, f)
 
-#if MIN_VERSION_base(4,9,0)
--- | __NOTE__: This instance is only defined for @base >= 4.9.0@.
---
--- @since 2.2.2
+-- | @since 2.2.2
 instance (Monoid w) => MonadWriter w ((,) w) where
   writer ~(a, w) = (w, a)
   tell w = (w, ())
   listen ~(w, a) = (w, (a, w))
   pass ~(w, (a, f)) = (f w, a)
-#endif
+
+-- | @since 2.3
+instance (Monoid w, Monad m) => MonadWriter w (CPS.WriterT w m) where
+    writer = CPS.writer
+    tell   = CPS.tell
+    listen = CPS.listen
+    pass   = CPS.pass
 
 instance (Monoid w, Monad m) => MonadWriter w (Lazy.WriterT w m) where
     writer = Lazy.writer
@@ -125,6 +125,13 @@ instance (Monoid w, Monad m) => MonadWriter w (Strict.WriterT w m) where
     tell   = Strict.tell
     listen = Strict.listen
     pass   = Strict.pass
+
+-- | @since 2.3
+instance (Monoid w, Monad m) => MonadWriter w (CPSRWS.RWST r w s m) where
+    writer = CPSRWS.writer
+    tell   = CPSRWS.tell
+    listen = CPSRWS.listen
+    pass   = CPSRWS.pass
 
 instance (Monoid w, Monad m) => MonadWriter w (LazyRWS.RWST r w s m) where
     writer = LazyRWS.writer
@@ -143,12 +150,6 @@ instance (Monoid w, Monad m) => MonadWriter w (StrictRWS.RWST r w s m) where
 --
 -- All of these instances need UndecidableInstances,
 -- because they do not satisfy the coverage condition.
-
-instance (Error e, MonadWriter w m) => MonadWriter w (ErrorT e m) where
-    writer = lift . writer
-    tell   = lift . tell
-    listen = Error.liftListen listen
-    pass   = Error.liftPass pass
 
 -- | @since 2.2
 instance MonadWriter w m => MonadWriter w (ExceptT e m) where
@@ -186,3 +187,21 @@ instance MonadWriter w m => MonadWriter w (Strict.StateT s m) where
     tell   = lift . tell
     listen = Strict.liftListen listen
     pass   = Strict.liftPass pass
+
+-- | There are two valid instances for 'AccumT'. It could either:
+--
+--   1. Lift the operations to the inner @MonadWriter@
+--   2. Handle the operations itself, à la a @WriterT@.
+--
+--   This instance chooses (1), reflecting that the intent
+--   of 'AccumT' as a type is different than that of @WriterT@.
+--
+-- @since 2.3
+instance
+  ( Monoid w'
+  , MonadWriter w m
+  ) => MonadWriter w (AccumT w' m) where
+    writer = lift . writer
+    tell   = lift . tell
+    listen = Accum.liftListen listen
+    pass   = Accum.liftPass pass

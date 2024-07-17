@@ -6,7 +6,7 @@
  *
  * This file is written in a subset of C--, extended with various
  * features specific to GHC.  It is compiled by GHC directly.  For the
- * syntax of .cmm files, see the parser in ghc/compiler/cmm/CmmParse.y.
+ * syntax of .cmm files, see the parser in ghc/compiler/GHC/Cmm/Parser.y.
  *
  * ---------------------------------------------------------------------------*/
 
@@ -15,6 +15,13 @@
 #include "rts/prof/LDV.h"
 
 #include "Updates.h"
+
+#if !defined(UnregisterisedCompiler)
+import CLOSURE UPD_CON_IN_NEW_ctr;
+import CLOSURE UPD_OLD_IND_ctr;
+import CLOSURE UPD_NEW_IND_ctr;
+import CLOSURE stg_BLACKHOLE_info;
+#endif
 
 /*
  * The update code is PERFORMANCE CRITICAL, if you make any changes
@@ -52,7 +59,7 @@ INFO_TABLE_RET ( stg_marked_upd_frame, UPDATE_FRAME,
     ASSERT(HpAlloc == 0); // Note [HpAlloc]
 
     // we know the closure is a BLACKHOLE
-    v = StgInd_indirectee(updatee);
+    v = %acquire StgInd_indirectee(updatee);
 
     if (GETTAG(v) != 0) (likely: False) {
         // updated by someone else: discard our value and use the
@@ -91,7 +98,7 @@ INFO_TABLE_RET ( stg_bh_upd_frame, UPDATE_FRAME,
 }
 
 /* Note [HpAlloc]
- *
+ * ~~~~~~~~~~~~~~
  * HpAlloc is required to be zero unless we just bumped Hp and failed
  * the heap check: see HeapStackCheck.cmm.  Failures that result from
  * HpAlloc being non-zero are very hard to track down, because they

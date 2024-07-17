@@ -39,7 +39,7 @@
 
       <LI>
         <P>
-          <B><A HREF="libraries/ghc-@ProjectVersionMunged@/index.html">GHC API</A></B>
+          <B><A HREF="libraries/ghc-@LIBRARY_ghc_VERSION@/index.html">GHC API</A></B>
         </P>
         <P>
           Documentation for the GHC API.
@@ -50,7 +50,7 @@
     <P>For more information, see the following:</P>
     <UL>
       <LI><P><A href="http://www.haskell.org/ghc/">GHC Home Page</A></P></LI>
-      <LI><P><A href="http://ghc.haskell.org/trac/ghc/">
+      <LI><P><A href="https://gitlab.haskell.org/ghc/ghc/wikis/">
         GHC Developers Home</A></P></LI>
     </UL>
   </BODY>

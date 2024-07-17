@@ -31,9 +31,7 @@ import {-# SOURCE #-} GHC.Exception( divZeroException, overflowException
                                    , underflowException
                                    , ratioZeroDenomException )
 
-#if defined(MIN_VERSION_integer_gmp)
-import GHC.Integer.GMP.Internals
-#endif
+import GHC.Num.BigNat (gcdInt,gcdWord)
 
 infixr 8  ^, ^^
 infixl 7  /, `quot`, `rem`, `div`, `mod`
@@ -41,6 +39,17 @@ infixl 7  %
 
 default ()              -- Double isn't available yet,
                         -- and we shouldn't be using defaults anyway
+
+{- Note [Allow time for type-specialisation rules to fire]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Consider
+  lcm = ...
+  {-# RULES "lcm/Integer->Integer->Integer" lcm = integerLcm  #-}
+
+We want to delay inlining `lcm` until the rule (which is a form of manual
+type specialisation) has had a chance to fire.  It can fire in InitialPhase,
+so INLINE[2] seems sufficient.  c.f. #20709
+-}
 
 ------------------------------------------------------------------------
 -- Divide by zero and arithmetic overflow
@@ -126,6 +135,13 @@ denominator (_ :% y)    =  y
 -- Standard numeric classes
 --------------------------------------------------------------
 
+-- | Real numbers.
+--
+-- The Haskell report defines no laws for 'Real', however 'Real' instances
+-- are customarily expected to adhere to the following law:
+--
+-- [__Coherence with 'fromRational'__]: if the type also implements 'Fractional',
+-- then 'fromRational' is a left inverse for 'toRational', i.e. @fromRational (toRational i) = i@
 class  (Num a, Ord a) => Real a  where
     -- | the rational equivalent of its real argument with full precision
     toRational          ::  a -> Rational
@@ -134,7 +150,7 @@ class  (Num a, Ord a) => Real a  where
 --
 -- The Haskell Report defines no laws for 'Integral'. However, 'Integral'
 -- instances are customarily expected to define a Euclidean domain and have the
--- following properties for the `div`\/`mod` and `quot`\/`rem` pairs, given
+-- following properties for the 'div'\/'mod' and 'quot'\/'rem' pairs, given
 -- suitable Euclidean functions @f@ and @g@:
 --
 -- * @x@ = @y * quot x y + rem x y@ with @rem x y@ = @fromInteger 0@ or
@@ -142,24 +158,45 @@ class  (Num a, Ord a) => Real a  where
 -- * @x@ = @y * div x y + mod x y@ with @mod x y@ = @fromInteger 0@ or
 -- @f (mod x y)@ < @f y@
 --
--- An example of a suitable Euclidean function, for `Integer`'s instance, is
+-- An example of a suitable Euclidean function, for 'Integer'\'s instance, is
 -- 'abs'.
+--
+-- In addition, 'toInteger` should be total, and 'fromInteger' should be a left
+-- inverse for it, i.e. @fromInteger (toInteger i) = i@.
 class  (Real a, Enum a) => Integral a  where
     -- | integer division truncated toward zero
+    --
+    -- WARNING: This function is partial (because it throws when 0 is passed as
+    -- the divisor) for all the integer types in @base@.
     quot                :: a -> a -> a
     -- | integer remainder, satisfying
     --
     -- > (x `quot` y)*y + (x `rem` y) == x
+    --
+    -- WARNING: This function is partial (because it throws when 0 is passed as
+    -- the divisor) for all the integer types in @base@.
     rem                 :: a -> a -> a
     -- | integer division truncated toward negative infinity
+    --
+    -- WARNING: This function is partial (because it throws when 0 is passed as
+    -- the divisor) for all the integer types in @base@.
     div                 :: a -> a -> a
     -- | integer modulus, satisfying
     --
     -- > (x `div` y)*y + (x `mod` y) == x
+    --
+    -- WARNING: This function is partial (because it throws when 0 is passed as
+    -- the divisor) for all the integer types in @base@.
     mod                 :: a -> a -> a
     -- | simultaneous 'quot' and 'rem'
+    --
+    -- WARNING: This function is partial (because it throws when 0 is passed as
+    -- the divisor) for all the integer types in @base@.
     quotRem             :: a -> a -> (a,a)
     -- | simultaneous 'div' and 'mod'
+    --
+    -- WARNING: This function is partial (because it throws when 0 is passed as
+    -- the divisor) for all the integer types in @base@.
     divMod              :: a -> a -> (a,a)
     -- | conversion to 'Integer'
     toInteger           :: a -> Integer
@@ -184,6 +221,9 @@ class  (Real a, Enum a) => Integral a  where
 --
 -- [__'recip' gives the multiplicative inverse__]:
 -- @x * recip x@ = @recip x * x@ = @fromInteger 1@
+-- [__Totality of 'toRational'__]: 'toRational' is total
+-- [__Coherence with 'toRational'__]: if the type also implements 'Real',
+-- then 'fromRational' is a left inverse for 'toRational', i.e. @fromRational (toRational i) = i@
 --
 -- Note that it /isn't/ customarily expected that a type instance of
 -- 'Fractional' implement a field. However, all instances in @base@ do.
@@ -248,6 +288,7 @@ class  (Real a, Fractional a) => RealFrac a  where
 -- These 'numeric' enumerations come straight from the Report
 
 numericEnumFrom         :: (Fractional a) => a -> [a]
+{-# INLINE numericEnumFrom #-}  -- See Note [Inline Enum method helpers] in GHC.Enum
 numericEnumFrom n       = go 0
   where
     -- See Note [Numeric Stability of Enumerating Floating Numbers]
@@ -255,6 +296,7 @@ numericEnumFrom n       = go 0
              in n' : go (k + 1)
 
 numericEnumFromThen     :: (Fractional a) => a -> a -> [a]
+{-# INLINE numericEnumFromThen #-}  -- See Note [Inline Enum method helpers] in GHC.Enum
 numericEnumFromThen n m = go 0
   where
     step = m - n
@@ -263,9 +305,11 @@ numericEnumFromThen n m = go 0
              in n' : go (k + 1)
 
 numericEnumFromTo       :: (Ord a, Fractional a) => a -> a -> [a]
+{-# INLINE numericEnumFromTo #-}  -- See Note [Inline Enum method helpers] in GHC.Enum
 numericEnumFromTo n m   = takeWhile (<= m + 1/2) (numericEnumFrom n)
 
 numericEnumFromThenTo   :: (Ord a, Fractional a) => a -> a -> a -> [a]
+{-# INLINE numericEnumFromThenTo #-}  -- See Note [Inline Enum method helpers] in GHC.Enum
 numericEnumFromThenTo e1 e2 e3
     = takeWhile predicate (numericEnumFromThen e1 e2)
                                 where
@@ -274,7 +318,7 @@ numericEnumFromThenTo e1 e2 e3
                                            | otherwise = (>= e3 + mid)
 
 {- Note [Numeric Stability of Enumerating Floating Numbers]
------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 When enumerate floating numbers, we could add the increment to the last number
 at every run (as what we did previously):
 
@@ -295,7 +339,7 @@ never reach the condition in `numericEnumFromTo`
 
     9007199254740990 + 1 + 1 + ... > 9007199254740991 + 1/2
 
-We would fall into infinite loop (as reported in Trac #15081).
+We would fall into infinite loop (as reported in #15081).
 
 To remedy the situation, we record the number of `1` that needed to be added
 to the start number, rather than increasing `1` at every time. This approach
@@ -313,7 +357,7 @@ The benchmark on T7954.hs shows that this approach leads to significant
 degeneration on performance (33% increase allocation and 300% increase on
 elapsed time).
 
-See Trac #15081 and Phab:D4650 for the related discussion about this problem.
+See #15081 and Phab:D4650 for the related discussion about this problem.
 -}
 
 --------------------------------------------------------------
@@ -325,48 +369,57 @@ instance  Real Int  where
     toRational x        =  toInteger x :% 1
 
 -- | @since 2.0.1
-instance  Integral Int  where
-    toInteger (I# i) = smallInteger i
+instance Integral Int where
+    toInteger (I# i) = IS i
 
+    {-# INLINE quot #-} -- see Note [INLINE division wrappers] in GHC.Base
     a `quot` b
      | b == 0                     = divZeroError
      | b == (-1) && a == minBound = overflowError -- Note [Order of tests]
                                                   -- in GHC.Int
      | otherwise                  =  a `quotInt` b
 
-    a `rem` b
+    {-# INLINE rem #-} -- see Note [INLINE division wrappers] in GHC.Base
+    !a `rem` b -- See Note [Special case of mod and rem is lazy]
      | b == 0                     = divZeroError
-       -- The quotRem CPU instruction fails for minBound `quotRem` -1,
-       -- but minBound `rem` -1 is well-defined (0). We therefore
-       -- special-case it.
      | b == (-1)                  = 0
      | otherwise                  =  a `remInt` b
 
+    {-# INLINE div #-} -- see Note [INLINE division wrappers] in GHC.Base
     a `div` b
      | b == 0                     = divZeroError
      | b == (-1) && a == minBound = overflowError -- Note [Order of tests]
                                                   -- in GHC.Int
      | otherwise                  =  a `divInt` b
 
-    a `mod` b
+    {-# INLINE mod #-} -- see Note [INLINE division wrappers] in GHC.Base
+    !a `mod` b -- See Note [Special case of mod and rem is lazy]
      | b == 0                     = divZeroError
-       -- The divMod CPU instruction fails for minBound `divMod` -1,
-       -- but minBound `mod` -1 is well-defined (0). We therefore
-       -- special-case it.
      | b == (-1)                  = 0
      | otherwise                  =  a `modInt` b
 
+    {-# INLINE quotRem #-} -- see Note [INLINE division wrappers] in GHC.Base
     a `quotRem` b
      | b == 0                     = divZeroError
        -- Note [Order of tests] in GHC.Int
      | b == (-1) && a == minBound = (overflowError, 0)
      | otherwise                  =  a `quotRemInt` b
 
+    {-# INLINE divMod #-} -- see Note [INLINE division wrappers] in GHC.Base
     a `divMod` b
      | b == 0                     = divZeroError
        -- Note [Order of tests] in GHC.Int
      | b == (-1) && a == minBound = (overflowError, 0)
      | otherwise                  =  a `divModInt` b
+
+{- Note [Special case of mod and rem is lazy]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The `quotRem`/`divMod` CPU instruction fails for minBound `quotRem` -1, but
+minBound `rem` -1 is well-defined (0). We therefore special-case for `b == -1`,
+but not for `a == minBound` because of Note [Order of tests] in GHC.Int. But
+now we have to make sure the function stays strict in a, to guarantee unboxing.
+Hence the bang on a, see #18187.
+-}
 
 --------------------------------------------------------------
 -- Instances for @Word@
@@ -378,27 +431,33 @@ instance Real Word where
 
 -- | @since 2.01
 instance Integral Word where
+    -- see Note [INLINE division wrappers] in GHC.Base
+    {-# INLINE quot    #-}
+    {-# INLINE rem     #-}
+    {-# INLINE quotRem #-}
+    {-# INLINE div     #-}
+    {-# INLINE mod     #-}
+    {-# INLINE divMod  #-}
+
     quot    (W# x#) y@(W# y#)
         | y /= 0                = W# (x# `quotWord#` y#)
         | otherwise             = divZeroError
+
     rem     (W# x#) y@(W# y#)
         | y /= 0                = W# (x# `remWord#` y#)
         | otherwise             = divZeroError
-    div     (W# x#) y@(W# y#)
-        | y /= 0                = W# (x# `quotWord#` y#)
-        | otherwise             = divZeroError
-    mod     (W# x#) y@(W# y#)
-        | y /= 0                = W# (x# `remWord#` y#)
-        | otherwise             = divZeroError
+
     quotRem (W# x#) y@(W# y#)
         | y /= 0                = case x# `quotRemWord#` y# of
                                   (# q, r #) ->
                                       (W# q, W# r)
         | otherwise             = divZeroError
-    divMod  (W# x#) y@(W# y#)
-        | y /= 0                = (W# (x# `quotWord#` y#), W# (x# `remWord#` y#))
-        | otherwise             = divZeroError
-    toInteger (W# x#)           = wordToInteger x#
+
+    div    x y = quot x y
+    mod    x y = rem x y
+    divMod x y = quotRem x y
+
+    toInteger (W# x#)           = integerFromWord# x#
 
 --------------------------------------------------------------
 -- Instances for Integer
@@ -410,61 +469,74 @@ instance  Real Integer  where
 
 -- | @since 4.8.0.0
 instance Real Natural where
-    toRational n = naturalToInteger n :% 1
+    toRational n = integerFromNatural n :% 1
 
 -- Note [Integer division constant folding]
 -- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 --
--- Constant folding of quot, rem, div, mod, divMod and quotRem for
--- Integer arguments depends crucially on inlining. Constant folding
--- rules defined in compiler/prelude/PrelRules.hs trigger for
--- quotInteger, remInteger and so on. So if calls to quot, rem and so on
--- were not inlined the rules would not fire. The rules would also not
--- fire if calls to quotInteger and so on were inlined, but this does not
--- happen because they are all marked with NOINLINE pragma - see documentation
--- of integer-gmp or integer-simple.
+-- Constant folding of quot, rem, div, mod, divMod and quotRem for Integer
+-- arguments depends crucially on inlining. Constant folding rules defined in
+-- GHC.Core.Opt.ConstantFold trigger for integerQuot, integerRem and so on.
+-- So if calls to quot, rem and so on were not inlined the rules would not fire.
+--
+-- The rules would also not fire if calls to integerQuot and so on were inlined,
+-- but this does not happen because they are all marked with NOINLINE pragma.
+
 
 -- | @since 2.0.1
-instance  Integral Integer where
+instance Integral Integer where
+    -- see Note [INLINE division wrappers] in GHC.Base
+    {-# INLINE quot    #-}
+    {-# INLINE rem     #-}
+    {-# INLINE quotRem #-}
+    {-# INLINE div     #-}
+    {-# INLINE mod     #-}
+    {-# INLINE divMod  #-}
+
     toInteger n      = n
 
-    {-# INLINE quot #-}
-    _ `quot` 0 = divZeroError
-    n `quot` d = n `quotInteger` d
+    !_ `quot` 0 = divZeroError
+    n  `quot` d = n `integerQuot` d
 
-    {-# INLINE rem #-}
-    _ `rem` 0 = divZeroError
-    n `rem` d = n `remInteger` d
+    !_ `rem` 0 = divZeroError
+    n  `rem` d = n `integerRem` d
 
-    {-# INLINE div #-}
-    _ `div` 0 = divZeroError
-    n `div` d = n `divInteger` d
+    !_ `div` 0 = divZeroError
+    n  `div` d = n `integerDiv` d
 
-    {-# INLINE mod #-}
-    _ `mod` 0 = divZeroError
-    n `mod` d = n `modInteger` d
+    !_ `mod` 0 = divZeroError
+    n  `mod` d = n `integerMod` d
 
-    {-# INLINE divMod #-}
-    _ `divMod` 0 = divZeroError
-    n `divMod` d = case n `divModInteger` d of
-                     (# x, y #) -> (x, y)
+    !_ `divMod` 0 = divZeroError
+    n  `divMod` d = n `integerDivMod` d
 
-    {-# INLINE quotRem #-}
-    _ `quotRem` 0 = divZeroError
-    n `quotRem` d = case n `quotRemInteger` d of
-                      (# q, r #) -> (q, r)
+    !_ `quotRem` 0 = divZeroError
+    n  `quotRem` d = n `integerQuotRem` d
 
 -- | @since 4.8.0.0
 instance Integral Natural where
-    toInteger = naturalToInteger
+    -- see Note [INLINE division wrappers] in GHC.Base
+    {-# INLINE quot    #-}
+    {-# INLINE rem     #-}
+    {-# INLINE quotRem #-}
+    {-# INLINE div     #-}
+    {-# INLINE mod     #-}
+    {-# INLINE divMod  #-}
 
-    divMod = quotRemNatural
-    div    = quotNatural
-    mod    = remNatural
+    toInteger x = integerFromNatural x
 
-    quotRem = quotRemNatural
-    quot    = quotNatural
-    rem     = remNatural
+    !_ `quot` 0 = divZeroError
+    n  `quot` d = n `naturalQuot` d
+
+    !_ `rem` 0 = divZeroError
+    n  `rem` d = n `naturalRem` d
+
+    !_ `quotRem` 0 = divZeroError
+    n  `quotRem` d = n `naturalQuotRem` d
+
+    div    x y = quot x y
+    mod    x y = rem x y
+    divMod x y = quotRem x y
 
 --------------------------------------------------------------
 -- Instances for @Ratio@
@@ -508,6 +580,16 @@ instance  (Integral a)  => RealFrac (Ratio a)  where
     {-# SPECIALIZE instance RealFrac Rational #-}
     properFraction (x:%y) = (fromInteger (toInteger q), r:%y)
                           where (q,r) = quotRem x y
+    round r =
+      let
+        (n, f) = properFraction r
+        x = if r < 0 then -1 else 1
+      in
+        case (compare (abs f) 0.5, odd n) of
+          (LT, _) -> n
+          (EQ, False) -> n
+          (EQ, True) -> n + x
+          (GT, _) -> n + x
 
 -- | @since 2.0.1
 instance  (Show a)  => Show (Ratio a)  where
@@ -539,35 +621,32 @@ instance  (Integral a)  => Enum (Ratio a)  where
 -- Coercions
 --------------------------------------------------------------
 
--- | general coercion from integral types
-{-# NOINLINE [1] fromIntegral #-}
+-- | General coercion from 'Integral' types.
+--
+-- WARNING: This function performs silent truncation if the result type is not
+-- at least as big as the argument's type.
+{-# INLINE fromIntegral #-}
+  -- Inlined to allow built-in rules to match.
+  -- See Note [Optimising conversions between numeric types]
+  -- in GHC.Core.Opt.ConstantFold
 fromIntegral :: (Integral a, Num b) => a -> b
 fromIntegral = fromInteger . toInteger
 
-{-# RULES
-"fromIntegral/Int->Int" fromIntegral = id :: Int -> Int
-    #-}
-
-{-# RULES
-"fromIntegral/Int->Word"  fromIntegral = \(I# x#) -> W# (int2Word# x#)
-"fromIntegral/Word->Int"  fromIntegral = \(W# x#) -> I# (word2Int# x#)
-"fromIntegral/Word->Word" fromIntegral = id :: Word -> Word
-    #-}
-
-{-# RULES
-"fromIntegral/Natural->Natural"  fromIntegral = id :: Natural -> Natural
-"fromIntegral/Natural->Integer"  fromIntegral = toInteger :: Natural->Integer
-"fromIntegral/Natural->Word"     fromIntegral = naturalToWord
-  #-}
-
-{-# RULES
-"fromIntegral/Word->Natural"     fromIntegral = wordToNatural
-"fromIntegral/Int->Natural"     fromIntegral = intToNatural
-  #-}
-
--- | general coercion to fractional types
+-- | General coercion to 'Fractional' types.
+--
+-- WARNING: This function goes through the 'Rational' type, which does not have values for 'NaN' for example.
+-- This means it does not round-trip.
+--
+-- For 'Double' it also behaves differently with or without -O0:
+--
+-- > Prelude> realToFrac nan -- With -O0
+-- > -Infinity
+-- > Prelude> realToFrac nan
+-- > NaN
 realToFrac :: (Real a, Fractional b) => a -> b
 {-# NOINLINE [1] realToFrac #-}
+-- See Note [Allow time for type-specialisation rules to fire]
+-- These rule actually appear in other modules, e.g. GHC.Float
 realToFrac = fromRational . toRational
 
 --------------------------------------------------------------
@@ -592,80 +671,116 @@ odd             =  not . even
 
 -------------------------------------------------------
 -- | raise a number to a non-negative integral power
-{-# SPECIALISE [1] (^) ::
-        Integer -> Integer -> Integer,
-        Integer -> Int -> Integer,
-        Int -> Int -> Int #-}
-{-# INLINABLE [1] (^) #-}    -- See Note [Inlining (^)]
+{-# INLINE [1] (^) #-}    -- See Note [Inlining (^)]
 (^) :: (Num a, Integral b) => a -> b -> a
 x0 ^ y0 | y0 < 0    = errorWithoutStackTrace "Negative exponent"
         | y0 == 0   = 1
-        | otherwise = f x0 y0
-    where -- f : x0 ^ y0 = x ^ y
-          f x y | even y    = f (x * x) (y `quot` 2)
-                | y == 1    = x
-                | otherwise = g (x * x) (y `quot` 2) x         -- See Note [Half of y - 1]
-          -- g : x0 ^ y0 = (x ^ y) * z
-          g x y z | even y = g (x * x) (y `quot` 2) z
-                  | y == 1 = x * z
-                  | otherwise = g (x * x) (y `quot` 2) (x * z) -- See Note [Half of y - 1]
+        | otherwise = powImpl x0 y0
+
+{-# SPECIALISE powImpl ::
+        Integer -> Integer -> Integer,
+        Integer -> Int -> Integer,
+        Int -> Int -> Int #-}
+{-# INLINABLE powImpl #-}    -- See Note [Inlining (^)]
+powImpl :: (Num a, Integral b) => a -> b -> a
+-- powImpl : x0 ^ y0 = (x ^ y)
+powImpl x y | even y    = powImpl (x * x) (y `quot` 2)
+            | y == 1    = x
+            | otherwise = powImplAcc (x * x) (y `quot` 2) x -- See Note [Half of y - 1]
+
+{-# SPECIALISE powImplAcc ::
+        Integer -> Integer -> Integer -> Integer,
+        Integer -> Int -> Integer -> Integer,
+        Int -> Int -> Int -> Int #-}
+{-# INLINABLE powImplAcc #-}    -- See Note [Inlining (^)]
+powImplAcc :: (Num a, Integral b) => a -> b -> a -> a
+-- powImplAcc : x0 ^ y0 = (x ^ y) * z
+powImplAcc x y z | even y    = powImplAcc (x * x) (y `quot` 2) z
+                 | y == 1    = x * z
+                 | otherwise = powImplAcc (x * x) (y `quot` 2) (x * z) -- See Note [Half of y - 1]
 
 -- | raise a number to an integral power
 (^^)            :: (Fractional a, Integral b) => a -> b -> a
-{-# INLINABLE [1] (^^) #-}         -- See Note [Inlining (^)
+{-# INLINE [1] (^^) #-}         -- See Note [Inlining (^)
 x ^^ n          =  if n >= 0 then x^n else recip (x^(negate n))
 
 {- Note [Half of y - 1]
-   ~~~~~~~~~~~~~~~~~~~~~
-   Since y is guaranteed to be odd and positive here,
-   half of y - 1 can be computed as y `quot` 2, optimising subtraction away.
+~~~~~~~~~~~~~~~~~~~~~~~~
+Since y is guaranteed to be odd and positive here,
+half of y - 1 can be computed as y `quot` 2, optimising subtraction away.
+
+Note [Inlining (^)]
+~~~~~~~~~~~~~~~~~~~
+We want to achieve the following:
+* Noting that (^) is lazy in its first argument, we'd still like to avoid allocating a box for
+  the first argument.   Example: nofib/imaginary/x2n1, which makes many calls to (^) with
+  different first arguments each time.
+
+  Solution: split (^) into a small INLINE wrapper that tests the second arg, which then calls the
+  strict (and recursive) auxiliary function `powImpl`.
+
+* Don't inline (^) too early because we want rewrite rules to optimise calls to (^) with
+  small exponents.  See Note [Powers with small exponent].
+
+  Solution: use INLINE[1] to delay inlining to phase 1, giving the rewrite rules time to fire.
+
+* (^) is overloaded on two different type parameters.  We want to specialise.
+
+  Solution: make `powImpl` (and its friend `powImplAcc`) INLINEABLE, so they can be specialised
+  at call sites.  Also give them some common specialisations right here, to avoid duplicating
+  that specialisation in clients.
+
+Specialisation can make a huge difference for repeated calls, because of
+constants which would otherwise be calculated repeatedly and unboxing of
+arguments.
+
+Why not make (^) strict in `x0` with a bang and make it INLINABLE? Well, because
+it is futile: Being strict in the `Complex Double` pair won't be enough to unbox
+the `Double`s anyway. Even after deep specisalisation, we will only unbox the
+`Double`s when we inline (^), because (^) remains lazy in the `Double` fields.
+Given that (^) must always inline to yield good code, we can just as well mark
+it as such.
+
+A small note on perf: Currently the fromInteger calls from the desugaring of
+literals are not floated because we get
+          \d1 d2 x y -> blah
+after the gentle round of simplification.
+
+Note [Powers with small exponent]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+For small exponents, (^) is inefficient compared to manually
+expanding the multiplication tree (see #5237).
+
+Here, rules for the most common exponent types are given.
+The range of exponents for which rules are given is quite
+arbitrary and kept small to not unduly increase the number of rules.
+0 and 1 are excluded based on the assumption that nobody would
+write x^0 or x^1 in code and the cases where an exponent could
+be statically resolved to 0 or 1 are rare.
+
+It might be desirable to have corresponding rules also for
+exponents of other types (e. g., Word), but it's doubtful they
+would fire, since the exponents of other types tend to get
+floated out before the rule has a chance to fire.
+
+Also desirable would be rules for (^^), but I haven't managed
+to get those to fire.
+
+Note: Since (*) is not associative for some types (e.g. Double), it is
+important that the RHS of these rules produce the same bracketing as
+would the actual implementation of (^). A mismatch here led to #19569.
 -}
 
-{- Note [Inlining (^)
-   ~~~~~~~~~~~~~~~~~~~~~
-   The INLINABLE pragma allows (^) to be specialised at its call sites.
-   If it is called repeatedly at the same type, that can make a huge
-   difference, because of those constants which can be repeatedly
-   calculated.
-
-   Currently the fromInteger calls are not floated because we get
-             \d1 d2 x y -> blah
-   after the gentle round of simplification. -}
-
-{- Rules for powers with known small exponent
-    see #5237
-    For small exponents, (^) is inefficient compared to manually
-    expanding the multiplication tree.
-    Here, rules for the most common exponent types are given.
-    The range of exponents for which rules are given is quite
-    arbitrary and kept small to not unduly increase the number of rules.
-    0 and 1 are excluded based on the assumption that nobody would
-    write x^0 or x^1 in code and the cases where an exponent could
-    be statically resolved to 0 or 1 are rare.
-
-    It might be desirable to have corresponding rules also for
-    exponents of other types (e. g., Word), but it's doubtful they
-    would fire, since the exponents of other types tend to get
-    floated out before the rule has a chance to fire.
-
-    Also desirable would be rules for (^^), but I haven't managed
-    to get those to fire.
-
-    Note: Trying to save multiplications by sharing the square for
-    exponents 4 and 5 does not save time, indeed, for Double, it is
-    up to twice slower, so the rules contain flat sequences of
-    multiplications.
--}
-
+-- See Note [Powers with small exponent]
 {-# RULES
-"^2/Int"        forall x. x ^ (2 :: Int) = let u = x in u*u
-"^3/Int"        forall x. x ^ (3 :: Int) = let u = x in u*u*u
-"^4/Int"        forall x. x ^ (4 :: Int) = let u = x in u*u*u*u
-"^5/Int"        forall x. x ^ (5 :: Int) = let u = x in u*u*u*u*u
-"^2/Integer"    forall x. x ^ (2 :: Integer) = let u = x in u*u
-"^3/Integer"    forall x. x ^ (3 :: Integer) = let u = x in u*u*u
-"^4/Integer"    forall x. x ^ (4 :: Integer) = let u = x in u*u*u*u
-"^5/Integer"    forall x. x ^ (5 :: Integer) = let u = x in u*u*u*u*u
+"^2/Int"        forall x. x ^ (2 :: Int) = x*x
+"^3/Int"        forall x. x ^ (3 :: Int) = x*x*x
+"^4/Int"        forall x. x ^ (4 :: Int) = let u = x*x in u*u
+"^5/Int"        forall x. x ^ (5 :: Int) = let u = x*x in u*u*x
+"^2/Integer"    forall x. x ^ (2 :: Integer) = x*x
+"^3/Integer"    forall x. x ^ (3 :: Integer) = x*x*x
+"^4/Integer"    forall x. x ^ (4 :: Integer) = let u = x*x in u*u
+"^5/Integer"    forall x. x ^ (5 :: Integer) = let u = x*x in u*u*x
   #-}
 
 -------------------------------------------------------
@@ -738,7 +853,9 @@ x ^^ n          =  if n >= 0 then x^n else recip (x^(negate n))
 -- the result may be negative if one of the arguments is @'minBound'@ (and
 -- necessarily is if the other is @0@ or @'minBound'@) for such types.
 gcd             :: (Integral a) => a -> a -> a
-{-# NOINLINE [1] gcd #-}
+{-# SPECIALISE gcd :: Int -> Int -> Int #-}
+{-# SPECIALISE gcd :: Word -> Word -> Word #-}
+{-# NOINLINE [2] gcd #-} -- See Note [Allow time for type-specialisation rules to fire]
 gcd x y         =  gcd' (abs x) (abs y)
                    where gcd' a 0  =  a
                          gcd' a b  =  gcd' b (a `rem` b)
@@ -747,37 +864,30 @@ gcd x y         =  gcd' (abs x) (abs y)
 lcm             :: (Integral a) => a -> a -> a
 {-# SPECIALISE lcm :: Int -> Int -> Int #-}
 {-# SPECIALISE lcm :: Word -> Word -> Word #-}
-{-# NOINLINE [1] lcm #-}
+{-# NOINLINE [2] lcm #-} -- See Note [Allow time for type-specialisation rules to fire]
 lcm _ 0         =  0
 lcm 0 _         =  0
 lcm x y         =  abs ((x `quot` (gcd x y)) * y)
 
 {-# RULES
-"gcd/Integer->Integer->Integer" gcd = gcdInteger
-"lcm/Integer->Integer->Integer" lcm = lcmInteger
-"gcd/Natural->Natural->Natural" gcd = gcdNatural
-"lcm/Natural->Natural->Natural" lcm = lcmNatural
+"gcd/Integer->Integer->Integer" gcd = integerGcd
+"lcm/Integer->Integer->Integer" lcm = integerLcm
+"gcd/Natural->Natural->Natural" gcd = naturalGcd
+"lcm/Natural->Natural->Natural" lcm = naturalLcm
  #-}
-
-#if defined(MIN_VERSION_integer_gmp)
--- GMP defines a more efficient Int# and Word# GCD
-
-gcdInt' :: Int -> Int -> Int
-gcdInt' (I# x) (I# y) = I# (gcdInt x y)
-
-gcdWord' :: Word -> Word -> Word
-gcdWord' (W# x) (W# y) = W# (gcdWord x y)
 
 {-# RULES
-"gcd/Int->Int->Int"             gcd = gcdInt'
-"gcd/Word->Word->Word"          gcd = gcdWord'
+"gcd/Int->Int->Int"             gcd = gcdInt
+"gcd/Word->Word->Word"          gcd = gcdWord
  #-}
 
-#endif
-
+-- INLINE pragma: see Note [Inline Enum method helpers] in GHC.Enum
+{-# INLINE integralEnumFrom #-}
 integralEnumFrom :: (Integral a, Bounded a) => a -> [a]
 integralEnumFrom n = map fromInteger [toInteger n .. toInteger (maxBound `asTypeOf` n)]
 
+-- INLINE pragma: see Note [Inline Enum method helpers] in GHC.Enum
+{-# INLINE integralEnumFromThen #-}
 integralEnumFromThen :: (Integral a, Bounded a) => a -> a -> [a]
 integralEnumFromThen n1 n2
   | i_n2 >= i_n1  = map fromInteger [i_n1, i_n2 .. toInteger (maxBound `asTypeOf` n1)]
@@ -786,9 +896,32 @@ integralEnumFromThen n1 n2
     i_n1 = toInteger n1
     i_n2 = toInteger n2
 
+-- INLINE pragma: see Note [Inline Enum method helpers] in GHC.Enum
+{-# INLINE integralEnumFromTo #-}
 integralEnumFromTo :: Integral a => a -> a -> [a]
 integralEnumFromTo n m = map fromInteger [toInteger n .. toInteger m]
 
+-- INLINE pragma: see Note [Inline Enum method helpers] in GHC.Enum
+{-# INLINE integralEnumFromThenTo #-}
 integralEnumFromThenTo :: Integral a => a -> a -> a -> [a]
 integralEnumFromThenTo n1 n2 m
   = map fromInteger [toInteger n1, toInteger n2 .. toInteger m]
+
+-- mkRational related code
+
+data FractionalExponentBase
+  = Base2
+  | Base10
+  deriving (Show)
+
+mkRationalBase2 :: Rational -> Integer -> Rational
+mkRationalBase2 r e = mkRationalWithExponentBase r e Base2
+
+mkRationalBase10 :: Rational -> Integer -> Rational
+mkRationalBase10 r e = mkRationalWithExponentBase r e Base10
+
+mkRationalWithExponentBase :: Rational -> Integer
+                           -> FractionalExponentBase -> Rational
+mkRationalWithExponentBase r e feb = r * (eb ^^ e)
+  -- See Note [fractional exponent bases] for why only these bases.
+  where eb = case feb of Base2 -> 2 ; Base10 -> 10

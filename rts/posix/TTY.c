@@ -6,7 +6,7 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#include "PosixSource.h"
+#include "rts/PosixSource.h"
 #include "Rts.h"
 
 #include "RtsUtils.h" // __hscore_get/set prototypes
@@ -46,7 +46,7 @@ resetTerminalSettings (void)
 #if HAVE_TERMIOS_H
     // Reset the terminal settings on the standard file descriptors,
     // if we changed them.  See System.Posix.Internals.tcSetAttr for
-    // more details, including the reason we termporarily disable
+    // more details, including the reason we temporarily disable
     // SIGTTOU here.
     {
         int fd;

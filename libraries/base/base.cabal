@@ -1,19 +1,24 @@
 cabal-version:  3.0
 name:           base
-version:        4.13.0.0
+version:        4.18.2.1
 -- NOTE: Don't forget to update ./changelog.md
 
 license:        BSD-3-Clause
 license-file:   LICENSE
-maintainer:     libraries@haskell.org
-bug-reports:    http://ghc.haskell.org/trac/ghc/newticket?component=libraries/base
-synopsis:       Basic libraries
+maintainer:     Core Libraries Committee <core-libraries-committee@haskell.org>
+bug-reports:    https://github.com/haskell/core-libraries-committee/issues
+synopsis:       Core data structures and operations
 category:       Prelude
 build-type:     Configure
-description:
-    This package contains the Standard Haskell "Prelude" and its support libraries,
-    and a large collection of useful libraries ranging from data
-    structures to parsing combinators and debugging utilities.
+description:    Haskell's base library provides, among other things, core types (e.g. [Bool]("Data.Bool") and [Int]("Data.Int")),
+                data structures (e.g. [List]("Data.List"), [Tuple]("Data.Tuple") and [Maybe]("Data.Maybe")),
+                the [Exception]("Control.Exception") mechanism, and the [IO]("System.IO") & [Concurrency]("Control.Concurrent") operations.
+                The "Prelude" module, which is imported by default, exposes a curated set of types and functions from other modules.
+
+                Other data structures like [Map](https://hackage.haskell.org/package/containers/docs/Data-Map.html),
+                [Set](https://hackage.haskell.org/package/containers/docs/Data-Set.html) are available in the [containers](https://hackage.haskell.org/package/containers) library.
+                To work with textual data, use the [text](https://hackage.haskell.org/package/text/docs/Data-Text.html) library.
+
 
 extra-tmp-files:
     autom4te.cache
@@ -27,8 +32,6 @@ extra-source-files:
     aclocal.m4
     base.buildinfo.in
     changelog.md
-    config.guess
-    config.sub
     configure
     configure.ac
     include/CTypes.h
@@ -37,22 +40,13 @@ extra-source-files:
     include/ieee-flpt.h
     include/md5.h
     include/fs.h
+    include/winio_structs.h
     install-sh
 
 source-repository head
     type:     git
     location: https://gitlab.haskell.org/ghc/ghc.git
     subdir:   libraries/base
-
-Flag integer-simple
-    Description: Use integer-simple
-    Manual: True
-    Default: False
-
-Flag integer-gmp
-    Description: Use integer-gmp
-    Manual: True
-    Default: False
 
 Library
     default-language: Haskell2010
@@ -95,17 +89,10 @@ Library
         UnliftedFFITypes
         Unsafe
 
-    build-depends: rts == 1.0, ghc-prim ^>= 0.5.1.0
-
-    -- sanity-check to ensure exactly one flag is set
-    if !((flag(integer-gmp) && !flag(integer-simple)) || (!flag(integer-gmp) && flag(integer-simple)))
-        build-depends: invalid-cabal-flag-settings<0
-
-    if flag(integer-simple)
-        build-depends: integer-simple ^>= 0.1.1
-
-    if flag(integer-gmp)
-        build-depends: integer-gmp ^>= 1.0.1
+    build-depends:
+        rts == 1.0.*,
+        ghc-prim >= 0.5.1.0 && < 0.11,
+        ghc-bignum >= 1.0 && < 2.0
 
     exposed-modules:
         Control.Applicative
@@ -131,7 +118,9 @@ Library
         Control.Monad.ST.Strict
         Control.Monad.ST.Unsafe
         Control.Monad.Zip
+        Data.Array.Byte
         Data.Bifoldable
+        Data.Bifoldable1
         Data.Bifunctor
         Data.Bitraversable
         Data.Bits
@@ -145,6 +134,7 @@ Library
         Data.Eq
         Data.Fixed
         Data.Foldable
+        Data.Foldable1
         Data.Function
         Data.Functor
         Data.Functor.Classes
@@ -175,6 +165,7 @@ Library
         Data.Type.Bool
         Data.Type.Coercion
         Data.Type.Equality
+        Data.Type.Ord
         Data.Typeable
         Data.Unique
         Data.Version
@@ -183,6 +174,7 @@ Library
         Debug.Trace
         Foreign
         Foreign.C
+        Foreign.C.ConstPtr
         Foreign.C.Error
         Foreign.C.String
         Foreign.C.Types
@@ -203,7 +195,9 @@ Library
         Foreign.StablePtr
         Foreign.Storable
         GHC.Arr
+        GHC.ArrayArray
         GHC.Base
+        GHC.Bits
         GHC.ByteOrder
         GHC.Char
         GHC.Clock
@@ -214,9 +208,11 @@ Library
         GHC.ConsoleHandler
         GHC.Constants
         GHC.Desugar
+        GHC.Encoding.UTF8
         GHC.Enum
         GHC.Environment
         GHC.Err
+        GHC.Event.TimeOut
         GHC.Exception
         GHC.Exception.Type
         GHC.ExecutionStack
@@ -232,6 +228,7 @@ Library
         GHC.GHCi
         GHC.GHCi.Helpers
         GHC.Generics
+        GHC.InfoProv
         GHC.IO
         GHC.IO.Buffer
         GHC.IO.BufferedIO
@@ -255,9 +252,15 @@ Library
         GHC.IO.Handle.Types
         GHC.IO.IOMode
         GHC.IO.Unsafe
+        GHC.IO.StdHandles
+        GHC.IO.SubSystem
         GHC.IOArray
         GHC.IORef
         GHC.Int
+        GHC.Integer
+        GHC.Integer.Logarithms
+        GHC.IsList
+        GHC.Ix
         GHC.List
         GHC.Maybe
         GHC.MVar
@@ -274,6 +277,7 @@ Library
         GHC.ResponseFile
         GHC.RTS.Flags
         GHC.ST
+        GHC.Stack.CloneStack
         GHC.StaticPtr
         GHC.STRef
         GHC.Show
@@ -285,10 +289,14 @@ Library
         GHC.Stats
         GHC.Storable
         GHC.TopHandler
+        GHC.TypeError
         GHC.TypeLits
+        GHC.TypeLits.Internal
         GHC.TypeNats
+        GHC.TypeNats.Internal
         GHC.Unicode
         GHC.Weak
+        GHC.Weak.Finalize
         GHC.Word
         Numeric
         Numeric.Natural
@@ -318,6 +326,13 @@ Library
         Type.Reflection
         Type.Reflection.Unsafe
         Unsafe.Coerce
+        -- TODO: remove
+        GHC.IOPort
+
+    reexported-modules:
+          GHC.Num.Integer
+        , GHC.Num.Natural
+        , GHC.Num.BigNat
 
     other-modules:
         Control.Monad.ST.Imp
@@ -327,75 +342,145 @@ Library
         Data.Semigroup.Internal
         Data.Typeable.Internal
         Foreign.ForeignPtr.Imp
+        GHC.IO.Handle.Lock.Common
+        GHC.IO.Handle.Lock.Flock
+        GHC.IO.Handle.Lock.LinuxOFD
+        GHC.IO.Handle.Lock.NoOp
+        GHC.IO.Handle.Lock.Windows
         GHC.StaticPtr.Internal
+        GHC.Event.Arr
+        GHC.Event.Array
+        GHC.Event.Internal
+        GHC.Event.Internal.Types
+        GHC.Event.IntTable
+        GHC.Event.IntVar
+        GHC.Event.PSQ
+        GHC.Event.Unique
+        -- GHC.IOPort -- TODO: hide again after debug
+        GHC.Unicode.Internal.Bits
+        GHC.Unicode.Internal.Char.DerivedCoreProperties
+        GHC.Unicode.Internal.Char.UnicodeData.GeneralCategory
+        GHC.Unicode.Internal.Char.UnicodeData.SimpleLowerCaseMapping
+        GHC.Unicode.Internal.Char.UnicodeData.SimpleTitleCaseMapping
+        GHC.Unicode.Internal.Char.UnicodeData.SimpleUpperCaseMapping
+        GHC.Unicode.Internal.Version
         System.Environment.ExecutablePath
         System.CPUTime.Utils
 
-    c-sources:
-        cbits/DarwinUtils.c
-        cbits/PrelIOUtils.c
-        cbits/SetEnv.c
-        cbits/WCsubst.c
-        cbits/Win32Utils.c
-        cbits/consUtils.c
-        cbits/iconv.c
-        cbits/inputReady.c
-        cbits/md5.c
-        cbits/primFloat.c
-        cbits/sysconf.c
-        cbits/fs.c
+    if !arch(javascript)
+      c-sources:
+          cbits/DarwinUtils.c
+          cbits/PrelIOUtils.c
+          cbits/SetEnv.c
+          cbits/iconv.c
+          cbits/inputReady.c
+          cbits/md5.c
+          cbits/primFloat.c
+          cbits/sysconf.c
+          cbits/fs.c
 
-    cmm-sources:
-        cbits/CastFloatWord.cmm
+      cmm-sources:
+          cbits/CastFloatWord.cmm
+          cbits/StackCloningDecoding.cmm
+
+    if arch(javascript)
+      js-sources:
+          -- "platform" must be linked first because it defines global constants
+          -- (e.g. h$isNode)
+          jsbits/platform.js
+          jsbits/base.js
+          jsbits/errno.js
 
     include-dirs: include
     includes:
         HsBase.h
     install-includes:
         HsBase.h
-        WCsubst.h
         consUtils.h
 
     -- OS Specific
     if os(windows)
         -- Windows requires some extra libraries for linking because the RTS
         -- is no longer re-exporting them.
-        -- msvcrt: standard C library. The RTS will automatically include this,
-        --         but is added for completeness.
-        -- mingwex: provides C99 compatibility. libm is a stub on MingW.
+        -- mingwex: provides GNU POSIX extensions that aren't provided by ucrt.
         -- mingw32: Unfortunately required because of a resource leak between
         --          mingwex and mingw32. the __math_err symbol is defined in
         --          mingw32 which is required by mingwex.
-        extra-libraries: wsock32, user32, shell32, msvcrt, mingw32, mingwex
+        -- shlwapi: provides PathFileExistsW
+        -- ws2_32: provides access to socket types and functions
+        -- ole32: provides UUID functionality.
+        -- rpcrt4: provides RPC UUID creation.
+        -- ntdll: provides access to functions to inspect window handles
+        -- kernel32: provides GetConsoleCP
+        -- advapi32: provides advanced kernel functions
+        extra-libraries:
+            wsock32, user32, shell32, mingw32, kernel32, advapi32,
+            mingwex, ws2_32, shlwapi, ole32, rpcrt4, ntdll
+        -- Minimum supported Windows version.
+        -- These numbers can be found at:
+        --  https://msdn.microsoft.com/en-us/library/windows/desktop/aa383745(v=vs.85).aspx
+        -- If we're compiling on windows, enforce that we only support Windows 7+
+        -- Adding this here means it doesn't have to be done in individual .c files
+        -- and also centralizes the versioning.
+        cpp-options: -D_WIN32_WINNT=0x06010000
+        cc-options: -D_WIN32_WINNT=0x06010000
         exposed-modules:
             GHC.IO.Encoding.CodePage.API
             GHC.IO.Encoding.CodePage.Table
             GHC.Conc.Windows
+            GHC.Conc.WinIO
+            GHC.Conc.POSIX
+            GHC.Conc.POSIX.Const
             GHC.Windows
+            GHC.Event.Windows
+            GHC.Event.Windows.Clock
+            GHC.Event.Windows.ConsoleEvent
+            GHC.Event.Windows.FFI
+            GHC.Event.Windows.ManagedThreadPool
+            GHC.Event.Windows.Thread
+            GHC.IO.Handle.Windows
+            GHC.IO.Windows.Handle
+            GHC.IO.Windows.Encoding
+            GHC.IO.Windows.Paths
         other-modules:
             System.CPUTime.Windows
+        c-sources:
+            cbits/Win32Utils.c
+            cbits/consUtils.c
+            cbits/IOutils.c
+
     else
         exposed-modules:
             GHC.Event
         other-modules:
-            GHC.Event.Arr
-            GHC.Event.Array
             GHC.Event.Control
             GHC.Event.EPoll
-            GHC.Event.IntTable
-            GHC.Event.Internal
             GHC.Event.KQueue
             GHC.Event.Manager
-            GHC.Event.PSQ
             GHC.Event.Poll
             GHC.Event.Thread
             GHC.Event.TimerManager
-            GHC.Event.Unique
 
             System.CPUTime.Posix.ClockGetTime
             System.CPUTime.Posix.Times
             System.CPUTime.Posix.RUsage
             System.CPUTime.Unsupported
+
+        if arch(javascript)
+          other-modules:
+            System.CPUTime.Javascript
+
+    -- The Ports framework always passes this flag when building software that
+    -- uses iconv to make iconv from Ports compatible with iconv from the base system
+    -- See /usr/ports/Mk/Uses/iconv.mk
+    if os(freebsd)
+        cc-options: -DLIBICONV_PLUG
+
+    if arch(javascript)
+        exposed-modules:
+            GHC.JS.Prim
+            GHC.JS.Prim.Internal
+            GHC.JS.Prim.Internal.Build
 
     -- We need to set the unit id to base (without a version number)
     -- as it's magic.

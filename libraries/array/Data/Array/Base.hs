@@ -10,7 +10,7 @@
   , UnliftedFFITypes
   , RoleAnnotations
  #-}
-{-# OPTIONS_HADDOCK hide #-}
+{-# OPTIONS_HADDOCK not-home #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -25,13 +25,24 @@
 -- Basis for IArray and MArray.  Not intended for external consumption;
 -- use IArray or MArray instead.
 --
+-- = WARNING
+--
+-- This module is considered __internal__.
+--
+-- The Package Versioning Policy __does not apply__.
+--
+-- The contents of this module may change __in any way whatsoever__
+-- and __without any warning__ between minor versions of this package.
+--
+-- Authors importing this module are expected to track development
+-- closely.
 -----------------------------------------------------------------------------
 
 module Data.Array.Base where
 
 import Control.Monad.ST.Lazy ( strictToLazyST )
 import qualified Control.Monad.ST.Lazy as Lazy (ST)
-import Data.Ix ( Ix, range, index, rangeSize )
+import Data.Ix ( Ix, range, index, inRange, rangeSize )
 import Foreign.C.Types
 import Foreign.StablePtr
 
@@ -39,6 +50,7 @@ import Data.Char
 import GHC.Arr          ( STArray )
 import qualified GHC.Arr as Arr
 import qualified GHC.Arr as ArrST
+import GHC.Ix           ( unsafeIndex )
 import GHC.ST           ( ST(..), runST )
 import GHC.Base         ( IO(..), divInt# )
 import GHC.Exts
@@ -183,35 +195,24 @@ listArray (l,u) es =
     let n = safeRangeSize (l,u)
     in unsafeArray (l,u) (zip [0 .. n - 1] es)
 
-{-# INLINE listArrayST #-}
+{-# INLINE genArray #-}
+-- | Constructs an immutable array using a generator function.
+genArray :: (IArray a e, Ix i) => (i,i) -> (i -> e) -> a i e
+genArray (l,u) f = listArray (l,u) $ map f $ range (l,u)
+
+{-# INLINE listArrayST #-}   -- See Note [Inlining and fusion]
 listArrayST :: Ix i => (i,i) -> [e] -> ST s (STArray s i e)
-listArrayST (l,u) es = do
-    marr <- newArray_ (l,u)
-    let n = safeRangeSize (l,u)
-    let fillFromList i xs | i == n    = return ()
-                          | otherwise = case xs of
-            []   -> return ()
-            y:ys -> unsafeWrite marr i y >> fillFromList (i+1) ys
-    fillFromList 0 es
-    return marr
+listArrayST = newListArray
 
 {-# RULES
 "listArray/Array" listArray =
     \lu es -> runST (listArrayST lu es >>= ArrST.unsafeFreezeSTArray)
     #-}
 
-{-# INLINE listUArrayST #-}
+{-# INLINE listUArrayST #-}   -- See Note [Inlining and fusion]
 listUArrayST :: (MArray (STUArray s) e (ST s), Ix i)
              => (i,i) -> [e] -> ST s (STUArray s i e)
-listUArrayST (l,u) es = do
-    marr <- newArray_ (l,u)
-    let n = safeRangeSize (l,u)
-    let fillFromList i xs | i == n    = return ()
-                          | otherwise = case xs of
-            []   -> return ()
-            y:ys -> unsafeWrite marr i y >> fillFromList (i+1) ys
-    fillFromList 0 es
-    return marr
+listUArrayST = newListArray
 
 -- I don't know how to write a single rule for listUArrayST, because
 -- the type looks like constrained over 's', which runST doesn't
@@ -272,10 +273,20 @@ type ListUArray e = forall i . Ix i => (i,i) -> [e] -> UArray i e
     #-}
 
 {-# INLINE (!) #-}
--- | Returns the element of an immutable array at the specified index.
+-- | Returns the element of an immutable array at the specified index,
+-- or throws an exception if the index is out of bounds.
 (!) :: (IArray a e, Ix i) => a i e -> i -> e
 (!) arr i = case bounds arr of
               (l,u) -> unsafeAt arr $ safeIndex (l,u) (numElements arr) i
+
+{-# INLINE (!?) #-}
+-- | Returns 'Just' the element of an immutable array at the specified index,
+-- or 'Nothing' if the index is out of bounds.
+(!?) :: (IArray a e, Ix i) => a i e -> i -> Maybe e
+(!?) arr i = let b = bounds arr in
+             if inRange b i
+             then Just $ unsafeAt arr $ unsafeIndex b i
+             else Nothing
 
 {-# INLINE indices #-}
 -- | Returns a list of all the valid indices in an array.
@@ -662,7 +673,7 @@ instance IArray UArray (StablePtr a) where
 
 -- bogus StablePtr value for initialising a UArray of StablePtr.
 nullStablePtr :: StablePtr a
-nullStablePtr = StablePtr (unsafeCoerce# 0#)
+nullStablePtr = StablePtr (unsafeCoerce# nullAddr#)
 
 instance IArray UArray Int8 where
     {-# INLINE bounds #-}
@@ -824,23 +835,27 @@ in which the mutable array will be manipulated.
 -}
 class (Monad m) => MArray a e m where
 
-    -- | Returns the bounds of the array
+    -- | Returns the bounds of the array (lowest,highest)
     getBounds      :: Ix i => a i e -> m (i,i)
     -- | Returns the number of elements in the array
     getNumElements :: Ix i => a i e -> m Int
 
     -- | Builds a new array, with every element initialised to the supplied
-    -- value.
+    -- value. The first and second element of the tuple specifies the lowest
+    -- and highest index, respectively.
     newArray    :: Ix i => (i,i) -> e -> m (a i e)
 
     -- | Builds a new array, with every element initialised to an
     -- undefined value. In a monadic context in which operations must
     -- be deterministic (e.g. the ST monad), the array elements are
     -- initialised to a fixed but undefined value, such as zero.
+    -- The first and second element of the tuple specifies the lowest
+    -- and highest index, respectively.
     newArray_ :: Ix i => (i,i) -> m (a i e)
 
     -- | Builds a new array, with every element initialised to an undefined
-    -- value.
+    -- value. The first and second element of the tuple specifies the lowest
+    -- and highest index, respectively.
     unsafeNewArray_ :: Ix i => (i,i) -> m (a i e)
 
     unsafeRead  :: Ix i => a i e -> Int -> m e
@@ -886,19 +901,29 @@ instance MArray IOArray e IO where
     unsafeRead  = unsafeReadIOArray
     unsafeWrite = unsafeWriteIOArray
 
-{-# INLINE newListArray #-}
+{-# INLINE newListArray #-}   -- See Note [Inlining and fusion]
 -- | Constructs a mutable array from a list of initial elements.
 -- The list gives the elements of the array in ascending order
--- beginning with the lowest index.
+-- beginning with the lowest index. The first and second element
+-- of the tuple specifies the lowest and highest index, respectively.
 newListArray :: (MArray a e m, Ix i) => (i,i) -> [e] -> m (a i e)
 newListArray (l,u) es = do
     marr <- newArray_ (l,u)
     let n = safeRangeSize (l,u)
-    let fillFromList i xs | i == n    = return ()
-                          | otherwise = case xs of
-            []   -> return ()
-            y:ys -> unsafeWrite marr i y >> fillFromList (i+1) ys
-    fillFromList 0 es
+        f x k i
+            | i == n    = return ()
+            | otherwise = unsafeWrite marr i x >> k (i+1)
+    foldr f (const (return ())) es 0
+    return marr
+
+{-# INLINE newGenArray #-}
+-- | Constructs a mutable array using a generator function.
+-- It invokes the generator function in ascending order of the indices.
+newGenArray :: (MArray a e m, Ix i) => (i,i) -> (i -> m e) -> m (a i e)
+newGenArray (l,u) f = do
+    marr <- newArray_ (l,u)
+    let n = safeRangeSize (l,u)
+    sequence_ [ f i >>= unsafeWrite marr (safeIndex (l,u) n i) | i <- range (l,u)]
     return marr
 
 {-# INLINE readArray #-}
@@ -916,6 +941,31 @@ writeArray marr i e = do
   (l,u) <- getBounds marr
   n <- getNumElements marr
   unsafeWrite marr (safeIndex (l,u) n i) e
+
+{-# INLINE modifyArray #-}
+-- | Modify an element in a mutable array
+--
+-- @since FIXME
+modifyArray :: (MArray a e m, Ix i) => a i e -> i -> (e -> e) -> m ()
+modifyArray marr i f = do
+  (l,u) <- getBounds marr
+  n <- getNumElements marr
+  let idx = safeIndex (l,u) n i
+  x <- unsafeRead marr idx
+  unsafeWrite marr idx (f x)
+
+{-# INLINE modifyArray' #-}
+-- | Modify an element in a mutable array. Strict in the written element.
+--
+-- @since FIXME
+modifyArray' :: (MArray a e m, Ix i) => a i e -> i -> (e -> e) -> m ()
+modifyArray' marr i f = do
+  (l,u) <- getBounds marr
+  n <- getNumElements marr
+  let idx = safeIndex (l,u) n i
+  x <- unsafeRead marr idx
+  let !x' = f x
+  unsafeWrite marr idx x'
 
 {-# INLINE getElems #-}
 -- | Return a list of all the elements of a mutable array
@@ -1349,8 +1399,15 @@ instance MArray (STUArray s) Word64 (ST s) where
 
 bOOL_SCALE, wORD_SCALE, dOUBLE_SCALE, fLOAT_SCALE :: Int# -> Int#
 bOOL_SCALE n# =
-    -- + 7 to handle case where n is not divisible by 8
-    (n# +# 7#) `uncheckedIShiftRA#` 3#
+    -- Round the number of bits up to the next whole-word-aligned number
+    -- of bytes to avoid ghc#23132; the addition can signed-overflow but
+    -- that's OK because it will not unsigned-overflow and the logical
+    -- right-shift brings us back in-bounds
+#if SIZEOF_HSWORD == 4
+    ((n# +# 31#) `uncheckedIShiftRL#` 5#) `uncheckedIShiftL#` 2#
+#elif SIZEOF_HSWORD == 8
+    ((n# +# 63#) `uncheckedIShiftRL#` 6#) `uncheckedIShiftL#` 3#
+#endif
 wORD_SCALE   n# = safe_scale scale# n# where !(I# scale#) = SIZEOF_HSWORD
 dOUBLE_SCALE n# = safe_scale scale# n# where !(I# scale#) = SIZEOF_HSDOUBLE
 fLOAT_SCALE  n# = safe_scale scale# n# where !(I# scale#) = SIZEOF_HSFLOAT
@@ -1580,3 +1637,13 @@ unsafeFreezeIOArray (IOArray marr) = stToIO (ArrST.unsafeFreezeSTArray marr)
 
 castSTUArray :: STUArray s ix a -> ST s (STUArray s ix b)
 castSTUArray (STUArray l u n marr#) = return (STUArray l u n marr#)
+
+--------------------------------------------------------------------------------
+
+-- Note [Inlining and fusion]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~
+-- Many functions in this module are marked INLINE because they consume their
+-- input with `foldr`. By inlining them, it is possible that the `foldr` will
+-- meet a `build` from the call site, and beneficial fusion will take place.
+-- That is, they become "good consumers". See array issue #8 for data showing
+-- the perf improvement that comes with fusion.

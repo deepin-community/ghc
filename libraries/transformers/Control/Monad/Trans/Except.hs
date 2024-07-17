@@ -1,8 +1,9 @@
 {-# LANGUAGE CPP #-}
 #if __GLASGOW_HASKELL__ >= 702
 {-# LANGUAGE Safe #-}
+{-# LANGUAGE DeriveGeneric #-}
 #endif
-#if __GLASGOW_HASKELL__ >= 710
+#if __GLASGOW_HASKELL__ >= 710 && __GLASGOW_HASKELL__ < 802
 {-# LANGUAGE AutoDeriveTypeable #-}
 #endif
 -----------------------------------------------------------------------------
@@ -41,6 +42,9 @@ module Control.Monad.Trans.Except (
     -- * Exception operations
     throwE,
     catchE,
+    handleE,
+    tryE,
+    finallyE,
     -- * Lifting other operations
     liftCallCC,
     liftListen,
@@ -65,9 +69,14 @@ import Control.Monad.Fix
 #if MIN_VERSION_base(4,4,0)
 import Control.Monad.Zip (MonadZip(mzipWith))
 #endif
+#if !(MIN_VERSION_base(4,8,0))
 import Data.Foldable (Foldable(foldMap))
-import Data.Monoid
+import Data.Monoid (Monoid(mempty, mappend))
 import Data.Traversable (Traversable(traverse))
+#endif
+#if __GLASGOW_HASKELL__ >= 704
+import GHC.Generics
+#endif
 
 -- | The parameterizable exception monad.
 --
@@ -117,6 +126,11 @@ withExcept = withExceptT
 -- value, while @>>=@ sequences two subcomputations, exiting on the
 -- first exception.
 newtype ExceptT e m a = ExceptT (m (Either e a))
+#if __GLASGOW_HASKELL__ >= 710
+    deriving (Generic, Generic1)
+#elif __GLASGOW_HASKELL__ >= 704
+    deriving (Generic)
+#endif
 
 instance (Eq e, Eq1 m) => Eq1 (ExceptT e m) where
     liftEq eq (ExceptT x) (ExceptT y) = liftEq (liftEq eq) x y
@@ -291,6 +305,29 @@ m `catchE` h = ExceptT $ do
         Left  l -> runExceptT (h l)
         Right r -> return (Right r)
 {-# INLINE catchE #-}
+
+-- | The same as @'flip' 'catchE'@, which is useful in situations where
+-- the code for the handler is shorter.
+handleE :: Monad m => (e -> ExceptT e' m a) -> ExceptT e m a -> ExceptT e' m a
+handleE = flip catchE
+{-# INLINE handleE #-}
+
+-- | Similar to 'catchE', but returns an 'Either' result which is
+-- @('Right' a)@ if no exception was thown, or @('Left' ex)@ if an
+-- exception @ex@ was thrown.
+tryE :: Monad m => ExceptT e m a -> ExceptT e m (Either e a)
+tryE m = catchE (liftM Right m) (return . Left)
+{-# INLINE tryE #-}
+
+-- | @'finallyE' a b@ executes computation @a@ followed by computation @b@,
+-- even if @a@ exits early by throwing an exception.  In the latter case,
+-- the exception is re-thrown after @b@ has been executed.
+finallyE :: Monad m => ExceptT e m a -> ExceptT e m () -> ExceptT e m a
+finallyE m closer = do
+    res <- tryE m
+    closer
+    either throwE return res
+{-# INLINE finallyE #-}
 
 -- | Lift a @callCC@ operation to the new monad.
 liftCallCC :: CallCC m (Either e a) (Either e b) -> CallCC (ExceptT e m) a b

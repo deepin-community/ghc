@@ -6,11 +6,45 @@
  *
  * This file is written in a subset of C--, extended with various
  * features specific to GHC.  It is compiled by GHC directly.  For the
- * syntax of .cmm files, see the parser in ghc/compiler/cmm/CmmParse.y.
+ * syntax of .cmm files, see the parser in ghc/compiler/GHC/Cmm/Parser.y.
  *
  * -------------------------------------------------------------------------- */
 
 #include "Cmm.h"
+
+/*
+Note [import CLOSURE annotations]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When the Cmm syntax refers to an undefined symbol without a corresponding import
+statement, the parser always creates a CLabel with function kind, even if it
+refers to data instead (e.g. info tables or static closures). This is a huge
+trouble for backends which have zero tolerance in CLabel kind error. The issue
+has been tracked at #22368, and for the time being, we need to add explicit
+"import CLOSURE" statements for all undefined data symbols used in hand-written
+Cmm files.
+
+We also need the !defined(UnregisterisedCompiler) CPP guard, since otherwise it
+causes trouble for the unregisterised backend: they conflict with existing
+declarations in MiscClosures.h, and gcc will start to throw errors like "error:
+conflicting types for ‘__stg_EAGER_BLACKHOLE_info’; have ‘StgWordArray’ {aka
+‘long unsigned int[]’}".
+*/
+
+#if !defined(UnregisterisedCompiler)
+import CLOSURE CCS_OVERHEAD;
+import CLOSURE ENT_AP_ctr;
+import CLOSURE ENT_PAP_ctr;
+import CLOSURE ENT_VIA_NODE_ctr;
+import CLOSURE RtsFlags;
+import CLOSURE STK_CHK_ctr;
+import CLOSURE __stg_EAGER_BLACKHOLE_info;
+import CLOSURE stg_AP_STACK_info;
+import CLOSURE stg_PAP_info;
+import CLOSURE stg_WHITEHOLE_info;
+import CLOSURE stg_ap_0_ret_str;
+import CLOSURE stg_restore_cccs_eval_info;
+#endif
 
 /* ----------------------------------------------------------------------------
  * Evaluate a closure and return it.
@@ -23,12 +57,14 @@ STRING(stg_ap_0_ret_str,"stg_ap_0_ret... ")
 
 stg_ap_0_fast ( P_ fun )
 {
+    W_ _unused;
+
     IF_DEBUG(apply,
-        ccall debugBelch(stg_ap_0_ret_str);
+        ccall debugBelch(stg_ap_0_ret_str, NULL);
         ccall printClosure(R1 "ptr"));
 
     IF_DEBUG(sanity,
-        ccall checkStackFrame(Sp "ptr"));
+        (_unused) = ccall checkStackFrame(Sp "ptr"));
 
 #if !defined(PROFILING)
 
@@ -38,7 +74,7 @@ stg_ap_0_fast ( P_ fun )
 
 /*
   Note [Evaluating functions with profiling]
-
+  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   If we evaluate something like
 
     let f = {-# SCC "f" #-} g
@@ -72,7 +108,7 @@ again:
             IND,
             IND_STATIC:
         {
-            fun = StgInd_indirectee(fun);
+            fun = %acquire StgInd_indirectee(fun);
             goto again;
         }
         case BCO:
@@ -87,7 +123,8 @@ again:
             FUN_2_0,
             FUN_1_1,
             FUN_0_2,
-            FUN_STATIC:
+            FUN_STATIC,
+            CONTINUATION:
         {
             arity = TO_W_(StgFunInfoExtra_arity(%FUN_INFO(info)));
         dofun:
@@ -212,7 +249,7 @@ again:
    -------------------------------------------------------------------------- */
 
 INFO_TABLE(stg_PAP,/*special layout*/0,0,PAP,"PAP","PAP")
-{  ccall barf("PAP object entered!") never returns; }
+{  ccall barf("PAP object (%p) entered!", R1) never returns; }
 
 stg_PAP_apply /* no args => explicit stack */
 {
@@ -461,9 +498,9 @@ for:
    -------------------------------------------------------------------------- */
 
 /*
- Note [AP_STACKs must be eagerly blackholed]
- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Trac #13615 describes a nasty concurrency issue where we can enter into the
+Note [AP_STACKs must be eagerly blackholed]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#13615 describes a nasty concurrency issue where we can enter into the
 middle of an ST action multiple times, resulting in duplication of effects.
 In short, the construction of an AP_STACK allows us to suspend a computation
 which should not be duplicated. When running with lazy blackholing, we can then
@@ -571,7 +608,7 @@ being carried out by TSO 2 and attempt to suspend it.
 
 The suspension process proceeds by invoking raiseAsync, which walks the stack
 from the top looking for update frames. For each update frame we take any stack
-frames preceeding it and construct an AP_STACK heap object from them. We then
+frames preceding it and construct an AP_STACK heap object from them. We then
 replace the updatee of the frame with an indirection pointing to the AP_STACK.
 So, after suspending the first update frame we have,
 
@@ -654,9 +691,10 @@ INFO_TABLE(stg_AP_STACK,/*special layout*/0,0,AP_STACK,"AP_STACK","AP_STACK")
     /* someone else beat us to it */
     jump ENTRY_LBL(stg_WHITEHOLE) (ap);
   }
-  StgInd_indirectee(ap) = CurrentTSO;
-  prim_write_barrier;
-  SET_INFO(ap, __stg_EAGER_BLACKHOLE_info);
+  // Can't add StgInd_indirectee(ap) to UpdRemSet here because the old value is
+  // not reachable.
+  %release StgInd_indirectee(ap) = CurrentTSO;
+  SET_INFO_RELEASE(ap, __stg_EAGER_BLACKHOLE_info);
 
   /* ensure there is at least AP_STACK_SPLIM words of headroom available
    * after unpacking the AP_STACK. See bug #1466 */
@@ -687,7 +725,7 @@ for:
 
   // Because of eager blackholing the closure no longer has correct size so
   // threadPaused() can't correctly zero the slop, so we do it here. See #15571
-  // and Note [zeroing slop].
+  // and Note [zeroing slop when overwriting closures].
   OVERWRITING_CLOSURE_SIZE(ap, BYTES_TO_WDS(SIZEOF_StgThunkHeader) + 2 + Words);
 
   ENTER_R1();

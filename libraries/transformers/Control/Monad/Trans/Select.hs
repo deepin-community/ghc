@@ -1,11 +1,12 @@
 {-# LANGUAGE CPP #-}
 #if __GLASGOW_HASKELL__ >= 702
 {-# LANGUAGE Safe #-}
+{-# LANGUAGE DeriveGeneric #-}
 #endif
 #if __GLASGOW_HASKELL__ >= 706
 {-# LANGUAGE PolyKinds #-}
 #endif
-#if __GLASGOW_HASKELL__ >= 710
+#if __GLASGOW_HASKELL__ >= 710 && __GLASGOW_HASKELL__ < 802
 {-# LANGUAGE AutoDeriveTypeable #-}
 #endif
 -----------------------------------------------------------------------------
@@ -41,7 +42,6 @@ module Control.Monad.Trans.Select (
     mapSelectT,
     -- * Monad transformation
     selectToContT,
-    selectToCont,
     ) where
 
 import Control.Monad.IO.Class
@@ -54,6 +54,9 @@ import Control.Monad
 import qualified Control.Monad.Fail as Fail
 #endif
 import Data.Functor.Identity
+#if __GLASGOW_HASKELL__ >= 704
+import GHC.Generics
+#endif
 
 -- | Selection monad.
 type Select r = SelectT r Identity
@@ -81,6 +84,9 @@ mapSelect f = mapSelectT (Identity . f . runIdentity)
 -- 'SelectT' is not a functor on the category of monads, and many operations
 -- cannot be lifted through it.
 newtype SelectT r m a = SelectT ((a -> m r) -> m a)
+#if __GLASGOW_HASKELL__ >= 704
+    deriving (Generic)
+#endif
 
 -- | Runs a @SelectT@ computation with a function for evaluating answers
 -- to select a particular answer.  (The inverse of 'select'.)
@@ -153,9 +159,4 @@ instance (MonadIO m) => MonadIO (SelectT r m) where
 -- | Convert a selection computation to a continuation-passing computation.
 selectToContT :: (Monad m) => SelectT r m a -> ContT r m a
 selectToContT (SelectT g) = ContT $ \ k -> g k >>= k
-{-# INLINE selectToCont #-}
-
--- | Deprecated name for 'selectToContT'.
-{-# DEPRECATED selectToCont "Use selectToContT instead" #-}
-selectToCont :: (Monad m) => SelectT r m a -> ContT r m a
-selectToCont = selectToContT
+{-# INLINE selectToContT #-}

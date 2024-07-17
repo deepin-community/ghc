@@ -1,11 +1,12 @@
 {-# LANGUAGE CPP #-}
 #if __GLASGOW_HASKELL__ >= 702
 {-# LANGUAGE Safe #-}
+{-# LANGUAGE DeriveGeneric #-}
 #endif
 #if __GLASGOW_HASKELL__ >= 706
 {-# LANGUAGE PolyKinds #-}
 #endif
-#if __GLASGOW_HASKELL__ >= 710
+#if __GLASGOW_HASKELL__ >= 710 && __GLASGOW_HASKELL__ < 802
 {-# LANGUAGE AutoDeriveTypeable #-}
 #endif
 -----------------------------------------------------------------------------
@@ -27,6 +28,9 @@ module Data.Functor.Reverse (
   ) where
 
 import Control.Applicative.Backwards
+#if MIN_VERSION_base(4,18,0)
+import Data.Foldable1 (Foldable1(foldMap1))
+#endif
 import Data.Functor.Classes
 #if MIN_VERSION_base(4,12,0)
 import Data.Functor.Contravariant
@@ -39,12 +43,22 @@ import Control.Monad
 import qualified Control.Monad.Fail as Fail
 #endif
 import Data.Foldable
-import Data.Traversable
+#if !(MIN_VERSION_base(4,8,0))
+import Data.Traversable (Traversable(traverse))
+#endif
 import Data.Monoid
+#if __GLASGOW_HASKELL__ >= 704
+import GHC.Generics
+#endif
 
 -- | The same functor, but with 'Foldable' and 'Traversable' instances
 -- that process the elements in the reverse order.
 newtype Reverse f a = Reverse { getReverse :: f a }
+#if __GLASGOW_HASKELL__ >= 710
+    deriving (Generic, Generic1)
+#elif __GLASGOW_HASKELL__ >= 704
+    deriving (Generic)
+#endif
 
 instance (Eq1 f) => Eq1 (Reverse f) where
     liftEq eq (Reverse x) (Reverse y) = liftEq eq x y
@@ -129,6 +143,12 @@ instance (Foldable f) => Foldable (Reverse f) where
     length (Reverse t) = length t
 #endif
 
+#if MIN_VERSION_base(4,18,0)
+-- | Fold from right to left.
+instance (Foldable1 f) => Foldable1 (Reverse f) where
+    foldMap1 f (Reverse t) = getDual (foldMap1 (Dual . f) t)
+#endif
+
 -- | Traverse from right to left.
 instance (Traversable f) => Traversable (Reverse f) where
     traverse f (Reverse t) =
@@ -137,7 +157,7 @@ instance (Traversable f) => Traversable (Reverse f) where
 
 #if MIN_VERSION_base(4,12,0)
 -- | Derived instance.
-instance Contravariant f => Contravariant (Reverse f) where
+instance (Contravariant f) => Contravariant (Reverse f) where
     contramap f = Reverse . contramap f . getReverse
     {-# INLINE contramap #-}
 #endif

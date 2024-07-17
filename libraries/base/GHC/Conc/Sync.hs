@@ -1,14 +1,12 @@
+{-# LANGUAGE CPP #-}
+{-# LANGUAGE MagicHash #-}
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE UnboxedTuples #-}
+{-# LANGUAGE UnliftedFFITypes #-}
+{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE Unsafe #-}
-{-# LANGUAGE CPP
-           , NoImplicitPrelude
-           , BangPatterns
-           , MagicHash
-           , UnboxedTuples
-           , UnliftedFFITypes
-           , StandaloneDeriving
-           , RankNTypes
-  #-}
-{-# OPTIONS_GHC -Wno-missing-signatures #-}
+
 {-# OPTIONS_HADDOCK not-home #-}
 
 -----------------------------------------------------------------------------
@@ -32,33 +30,44 @@
 
 -- #not-home
 module GHC.Conc.Sync
-        ( ThreadId(..)
+        (
+        -- * Threads
+          ThreadId(..)
+        , showThreadId
+        , myThreadId
+        , killThread
+        , throwTo
+        , yield
+        , labelThread
+        , labelThreadByteArray#
+        , mkWeakThreadId
+        -- ** Queries
+        , listThreads
+        , threadLabel
+        , ThreadStatus(..), BlockReason(..)
+        , threadStatus
+        , threadCapability
 
         -- * Forking and suchlike
         , forkIO
         , forkIOWithUnmask
         , forkOn
         , forkOnWithUnmask
+
+        -- * Capabilities
         , numCapabilities
         , getNumCapabilities
         , setNumCapabilities
         , getNumProcessors
+
+        -- * Sparks
         , numSparks
         , childHandler
-        , myThreadId
-        , killThread
-        , throwTo
         , par
         , pseq
         , runSparks
-        , yield
-        , labelThread
-        , mkWeakThreadId
 
-        , ThreadStatus(..), BlockReason(..)
-        , threadStatus
-        , threadCapability
-
+        -- * PrimMVar
         , newStablePtrPrimMVar, PrimMVar
 
         -- * Allocation counter and quota
@@ -102,20 +111,20 @@ import Data.Maybe
 
 import GHC.Base
 import {-# SOURCE #-} GHC.IO.Handle ( hFlush )
-import {-# SOURCE #-} GHC.IO.Handle.FD ( stdout )
+import {-# SOURCE #-} GHC.IO.StdHandles ( stdout )
+import GHC.Encoding.UTF8
 import GHC.Int
 import GHC.IO
-import GHC.IO.Encoding.UTF8
 import GHC.IO.Exception
 import GHC.Exception
-import qualified GHC.Foreign
 import GHC.IORef
 import GHC.MVar
-import GHC.Ptr
 import GHC.Real         ( fromIntegral )
-import GHC.Show         ( Show(..), showString )
+import GHC.Show         ( Show(..), showParen, showString )
 import GHC.Stable       ( StablePtr(..) )
 import GHC.Weak
+
+import Unsafe.Coerce    ( unsafeCoerce# )
 
 infixr 0 `par`, `pseq`
 
@@ -145,35 +154,33 @@ This misfeature will hopefully be corrected at a later date.
 
 -- | @since 4.2.0.0
 instance Show ThreadId where
-   showsPrec d t =
+   showsPrec d t = showParen (d >= 11) $
         showString "ThreadId " .
         showsPrec d (getThreadId (id2TSO t))
 
-foreign import ccall unsafe "rts_getThreadId" getThreadId :: ThreadId# -> CInt
+showThreadId :: ThreadId -> String
+showThreadId = show
+
+foreign import ccall unsafe "rts_getThreadId" getThreadId :: ThreadId# -> CULLong
 
 id2TSO :: ThreadId -> ThreadId#
 id2TSO (ThreadId t) = t
 
+foreign import ccall unsafe "eq_thread" eq_thread :: ThreadId# -> ThreadId# -> CBool
+
 foreign import ccall unsafe "cmp_thread" cmp_thread :: ThreadId# -> ThreadId# -> CInt
 -- Returns -1, 0, 1
 
-cmpThread :: ThreadId -> ThreadId -> Ordering
-cmpThread t1 t2 =
-   case cmp_thread (id2TSO t1) (id2TSO t2) of
-      -1 -> LT
-      0  -> EQ
-      _  -> GT -- must be 1
-
 -- | @since 4.2.0.0
 instance Eq ThreadId where
-   t1 == t2 =
-      case t1 `cmpThread` t2 of
-         EQ -> True
-         _  -> False
+  ThreadId t1 == ThreadId t2 = eq_thread t1 t2 /= 0
 
 -- | @since 4.2.0.0
 instance Ord ThreadId where
-   compare = cmpThread
+  compare (ThreadId t1) (ThreadId t2) = case cmp_thread t1 t2 of
+    -1 -> LT
+    0  -> EQ
+    _  -> GT
 
 -- | Every thread has an allocation counter that tracks how much
 -- memory has been allocated by the thread.  The counter is
@@ -262,10 +269,15 @@ The newly created thread has an exception handler that discards the
 exceptions 'BlockedIndefinitelyOnMVar', 'BlockedIndefinitelyOnSTM', and
 'ThreadKilled', and passes all other exceptions to the uncaught
 exception handler.
+
+WARNING: Exceptions in the new thread will not be rethrown in the thread that
+created it. This means that you might be completely unaware of the problem
+if/when this happens.  You may want to use the
+<https://hackage.haskell.org/package/async async> library instead.
 -}
 forkIO :: IO () -> IO ThreadId
 forkIO action = IO $ \ s ->
-   case (fork# action_plus s) of (# s1, tid #) -> (# s1, ThreadId tid #)
+   case (fork# (unIO action_plus) s) of (# s1, tid #) -> (# s1, ThreadId tid #)
  where
   -- We must use 'catch' rather than 'catchException' because the action
   -- could be bottom. #13330
@@ -315,7 +327,7 @@ is recommended).
 -}
 forkOn :: Int -> IO () -> IO ThreadId
 forkOn (I# cpu) action = IO $ \ s ->
-   case (forkOn# cpu action_plus s) of (# s1, tid #) -> (# s1, ThreadId tid #)
+   case (forkOn# cpu (unIO action_plus) s) of (# s1, tid #) -> (# s1, ThreadId tid #)
  where
   -- We must use 'catch' rather than 'catchException' because the action
   -- could be bottom. #13330
@@ -482,24 +494,25 @@ yield :: IO ()
 yield = IO $ \s ->
    case (yield# s) of s1 -> (# s1, () #)
 
-{- | 'labelThread' stores a string as identifier for this thread if
-you built a RTS with debugging support. This identifier will be used in
-the debugging output to make distinction of different threads easier
-(otherwise you only have the thread state object\'s address in the heap).
-
-Other applications like the graphical Concurrent Haskell Debugger
-(<http://www.informatik.uni-kiel.de/~fhu/chd/>) may choose to overload
-'labelThread' for their purposes as well.
+{- | 'labelThread' stores a string as identifier for this thread. This
+identifier will be used in the debugging output to make distinction of
+different threads easier (otherwise you only have the thread state object\'s
+address in the heap). It also emits an event to the RTS eventlog.
 -}
-
 labelThread :: ThreadId -> String -> IO ()
-labelThread (ThreadId t) str =
-    GHC.Foreign.withCString utf8 str $ \(Ptr p) ->
-    IO $ \ s ->
-     case labelThread# t p s of s1 -> (# s1, () #)
+labelThread t str =
+    labelThreadByteArray# t (utf8EncodeByteArray# str)
+
+-- | 'labelThreadByteArray#' sets the label of a thread to the given UTF-8
+--  encoded string contained in a `ByteArray#`.
+--
+--  @since 4.18
+labelThreadByteArray# :: ThreadId -> ByteArray# -> IO ()
+labelThreadByteArray# (ThreadId t) str =
+    IO $ \s -> case labelThread# t str s of s1 -> (# s1, () #)
 
 --      Nota Bene: 'pseq' used to be 'seq'
---                 but 'seq' is now defined in PrelGHC
+--                 but 'seq' is now defined in GHC.Prim
 --
 -- "pseq" is defined a bit weirdly (see below)
 --
@@ -525,6 +538,25 @@ runSparks = IO loop
                       if isTrue# (n ==# 0#)
                       then (# s', () #)
                       else p `seq` loop s'
+
+-- | List the Haskell threads of the current process.
+--
+-- @since 4.18
+listThreads :: IO [ThreadId]
+listThreads = IO $ \s ->
+    case listThreads# s of
+      (# s', arr #) ->
+        (# s', mapListArrayUnlifted ThreadId arr #)
+
+mapListArrayUnlifted :: forall (a :: TYPE UnliftedRep) b. (a -> b) -> Array# a -> [b]
+mapListArrayUnlifted f arr = go 0#
+  where
+    sz = sizeofArray# arr
+    go i#
+      | isTrue# (i# ==# sz) = []
+      | otherwise = case indexArray# arr i# of
+                      (# x #) -> f x : go (i# +# 1#)
+{-# NOINLINE mapListArrayUnlifted #-}
 
 data BlockReason
   = BlockedOnMVar
@@ -565,12 +597,13 @@ data ThreadStatus
            , Show -- ^ @since 4.3.0.0
            )
 
+-- | Query the current execution status of a thread.
 threadStatus :: ThreadId -> IO ThreadStatus
 threadStatus (ThreadId t) = IO $ \s ->
    case threadStatus# t s of
     (# s', stat, _cap, _locked #) -> (# s', mk_stat (I# stat) #)
    where
-        -- NB. keep these in sync with includes/rts/Constants.h
+        -- NB. keep these in sync with rts/include/rts/Constants.h
      mk_stat 0  = ThreadRunning
      mk_stat 1  = ThreadBlocked BlockedOnMVar
      mk_stat 2  = ThreadBlocked BlockedOnBlackHole
@@ -594,6 +627,19 @@ threadCapability :: ThreadId -> IO (Int, Bool)
 threadCapability (ThreadId t) = IO $ \s ->
    case threadStatus# t s of
      (# s', _, cap#, locked# #) -> (# s', (I# cap#, isTrue# (locked# /=# 0#)) #)
+
+-- | Query the label of thread, returning 'Nothing' if the
+-- thread's label has not been set.
+--
+-- @since 4.18
+threadLabel :: ThreadId -> IO (Maybe String)
+threadLabel (ThreadId t) = IO $ \s ->
+    case threadLabel# t s of
+      (# s', 1#, lbl #) ->
+          let lbl' = utf8DecodeByteArray# lbl
+          in (# s', Just lbl' #)
+      (# s', 0#, _ #) -> (# s', Nothing #)
+      _ -> error "threadLabel: impossible"
 
 -- | Make a weak pointer to a 'ThreadId'.  It can be important to do
 -- this if you want to hold a reference to a 'ThreadId' while still
@@ -619,13 +665,16 @@ mkWeakThreadId t@(ThreadId t#) = IO $ \s ->
 
 data PrimMVar
 
--- | Make a StablePtr that can be passed to the C function
--- @hs_try_putmvar()@.  The RTS wants a 'StablePtr' to the underlying
--- 'MVar#', but a 'StablePtr#' can only refer to lifted types, so we
--- have to cheat by coercing.
-newStablePtrPrimMVar :: MVar () -> IO (StablePtr PrimMVar)
+-- | Make a 'StablePtr' that can be passed to the C function
+-- @hs_try_putmvar()@.  The RTS wants a 'StablePtr' to the
+-- underlying 'MVar#', but a 'StablePtr#' can only refer to
+-- lifted types, so we have to cheat by coercing.
+newStablePtrPrimMVar :: MVar a -> IO (StablePtr PrimMVar)
 newStablePtrPrimMVar (MVar m) = IO $ \s0 ->
   case makeStablePtr# (unsafeCoerce# m :: PrimMVar) s0 of
+    -- Coerce unlifted  m :: MVar# RealWorld a
+    --     to lifted    PrimMVar
+    -- apparently because mkStablePtr is not representation-polymorphic
     (# s1, sp #) -> (# s1, StablePtr sp #)
 
 -----------------------------------------------------------------------------
@@ -661,6 +710,14 @@ instance  Monad STM  where
     m >>= k     = bindSTM m k
     (>>) = (*>)
 
+-- | @since 4.17.0.0
+instance Semigroup a => Semigroup (STM a) where
+    (<>) = liftA2 (<>)
+
+-- | @since 4.17.0.0
+instance Monoid a => Monoid (STM a) where
+    mempty = pure mempty
+
 bindSTM :: STM a -> (a -> STM b) -> STM b
 bindSTM (STM m) k = STM ( \s ->
   case m s of
@@ -676,12 +733,16 @@ thenSTM (STM m) k = STM ( \s ->
 returnSTM :: a -> STM a
 returnSTM x = STM (\s -> (# s, x #))
 
--- | @since 4.8.0.0
+-- | Takes the first non-'retry'ing 'STM' action.
+--
+-- @since 4.8.0.0
 instance Alternative STM where
   empty = retry
   (<|>) = orElse
 
--- | @since 4.3.0.0
+-- | Takes the first non-'retry'ing 'STM' action.
+--
+-- @since 4.3.0.0
 instance MonadPlus STM
 
 -- | Unsafely performs IO in the STM monad.  Beware: this is a highly

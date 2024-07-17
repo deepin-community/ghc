@@ -21,7 +21,7 @@
   STM_FG_LOCKS -- per-TVar exclusion : each TVar can be owned by at
                   most one TRec at any time.  This allows dynamically
                   non-conflicting transactions to commit in parallel.
-                  The implementation treats reads optimisitcally --
+                  The implementation treats reads optimistically --
                   extra versioning information is retained in the 
                   saw_update_by field of the TVars so that they do not 
                   need to be locked for reading.
@@ -63,7 +63,7 @@ StgTRecHeader *stmStartNestedTransaction(Capability *cap, StgTRecHeader *outer
 );
 
 /*
- * Roll back the current transatcion context.  NB: if this is a nested tx
+ * Roll back the current transaction context.  NB: if this is a nested tx
  * then we merge its read set into its parents.  This is because a change
  * to that read set could change whether or not the tx should abort.
  */

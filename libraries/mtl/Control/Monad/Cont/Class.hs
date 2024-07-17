@@ -1,4 +1,12 @@
-{-# LANGUAGE CPP #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE Safe #-}
+{-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE QuantifiedConstraints #-}
+-- Needed because the CPSed versions of Writer and State are secretly State
+-- wrappers, which don't force such constraints, even though they should legally
+-- be there.
+{-# OPTIONS_GHC -Wno-redundant-constraints #-}
+
 {- |
 Module      :  Control.Monad.Cont.Class
 Copyright   :  (c) The University of Glasgow 2001,
@@ -51,35 +59,46 @@ to understand and maintain.
 
 module Control.Monad.Cont.Class (
     MonadCont(..),
+    label,
+    label_,
+    liftCallCC,
   ) where
 
+import Data.Kind (Type)
+import Control.Monad.Fix (fix)
 import Control.Monad.Trans.Cont (ContT)
 import qualified Control.Monad.Trans.Cont as ContT
-import Control.Monad.Trans.Error as Error
-import Control.Monad.Trans.Except as Except
-import Control.Monad.Trans.Identity as Identity
-import Control.Monad.Trans.List as List
-import Control.Monad.Trans.Maybe as Maybe
-import Control.Monad.Trans.Reader as Reader
-import Control.Monad.Trans.RWS.Lazy as LazyRWS
-import Control.Monad.Trans.RWS.Strict as StrictRWS
-import Control.Monad.Trans.State.Lazy as LazyState
-import Control.Monad.Trans.State.Strict as StrictState
-import Control.Monad.Trans.Writer.Lazy as LazyWriter
-import Control.Monad.Trans.Writer.Strict as StrictWriter
+import Control.Monad.Trans.Except (ExceptT)
+import qualified Control.Monad.Trans.Except as Except
+import Control.Monad.Trans.Identity (IdentityT)
+import qualified Control.Monad.Trans.Identity as Identity
+import Control.Monad.Trans.Maybe (MaybeT)
+import qualified Control.Monad.Trans.Maybe as Maybe
+import Control.Monad.Trans.Reader (ReaderT)
+import qualified Control.Monad.Trans.Reader as Reader
+import qualified Control.Monad.Trans.RWS.Lazy as LazyRWS
+import qualified Control.Monad.Trans.RWS.Strict as StrictRWS
+import qualified Control.Monad.Trans.State.Lazy as LazyState
+import qualified Control.Monad.Trans.State.Strict as StrictState
+import qualified Control.Monad.Trans.Writer.Lazy as LazyWriter
+import qualified Control.Monad.Trans.Writer.Strict as StrictWriter
+import Control.Monad.Trans.Accum (AccumT)
+import qualified Control.Monad.Trans.Accum as Accum
+import qualified Control.Monad.Trans.RWS.CPS as CPSRWS
+import qualified Control.Monad.Trans.Writer.CPS as CPSWriter
+import Control.Monad.Trans.Class (MonadTrans (lift))
+import Control.Monad.Signatures (CallCC)
+import Control.Monad (join)
 
-import Control.Monad
-import Data.Monoid
-
-class Monad m => MonadCont m where
+class Monad m => MonadCont (m :: Type -> Type) where
     {- | @callCC@ (call-with-current-continuation)
     calls a function with the current continuation as its argument.
     Provides an escape continuation mechanism for use with Continuation monads.
     Escape continuations allow to abort the current computation and return
     a value immediately.
-    They achieve a similar effect to 'Control.Monad.Error.throwError'
-    and 'Control.Monad.Error.catchError'
-    within an 'Control.Monad.Error.Error' monad.
+    They achieve a similar effect to 'Control.Monad.Error.Class.throwError'
+    and 'Control.Monad.Error.Class.catchError'
+    within an 'Control.Monad.Except.Except' monad.
     Advantage of this function over calling @return@ is that it makes
     the continuation explicit,
     allowing more flexibility and better control
@@ -91,28 +110,21 @@ class Monad m => MonadCont m where
     even if it is many layers deep within nested computations.
     -}
     callCC :: ((a -> m b) -> m a) -> m a
-#if __GLASGOW_HASKELL__ >= 707
     {-# MINIMAL callCC #-}
-#endif
 
-instance MonadCont (ContT r m) where
+-- | @since 2.3.1
+instance forall k (r :: k) (m :: (k -> Type)) . MonadCont (ContT r m) where
     callCC = ContT.callCC
 
 -- ---------------------------------------------------------------------------
 -- Instances for other mtl transformers
 
-instance (Error e, MonadCont m) => MonadCont (ErrorT e m) where
-    callCC = Error.liftCallCC callCC
-
-{- | @since 2.2 -}
+-- | @since 2.2
 instance MonadCont m => MonadCont (ExceptT e m) where
     callCC = Except.liftCallCC callCC
 
 instance MonadCont m => MonadCont (IdentityT m) where
     callCC = Identity.liftCallCC callCC
-
-instance MonadCont m => MonadCont (ListT m) where
-    callCC = List.liftCallCC callCC
 
 instance MonadCont m => MonadCont (MaybeT m) where
     callCC = Maybe.liftCallCC callCC
@@ -137,3 +149,60 @@ instance (Monoid w, MonadCont m) => MonadCont (LazyWriter.WriterT w m) where
 
 instance (Monoid w, MonadCont m) => MonadCont (StrictWriter.WriterT w m) where
     callCC = StrictWriter.liftCallCC callCC
+
+-- | @since 2.3
+instance (Monoid w, MonadCont m) => MonadCont (CPSRWS.RWST r w s m) where
+    callCC = CPSRWS.liftCallCC' callCC
+
+-- | @since 2.3
+instance (Monoid w, MonadCont m) => MonadCont (CPSWriter.WriterT w m) where
+    callCC = CPSWriter.liftCallCC callCC
+
+-- | @since 2.3
+instance
+  ( Monoid w
+  , MonadCont m
+  ) => MonadCont (AccumT w m) where
+    callCC = Accum.liftCallCC callCC
+
+-- | Introduces a recursive binding to the continuation.
+-- Due to the use of @callCC@, calling the continuation will interrupt execution
+-- of the current block creating an effect similar to goto/setjmp in C.
+--
+-- @since 2.3.1
+--
+label :: MonadCont m  => a -> m (a -> m b, a)
+label a = callCC $ \k -> let go b = k (go, b) in return (go, a)
+
+-- | Simplified version of `label` without arguments.
+-- 
+-- @since 2.3.1
+--
+label_ :: MonadCont m => m (m a)
+label_ = callCC $ return . fix
+
+-- | Lift a 'ContT.callCC'-style function through any 'MonadTrans'. 
+--
+-- = Note
+--
+-- For any function @f@, @'liftCallCC f'@ satisfies the [uniformity
+-- condition](https://hackage.haskell.org/package/transformers-0.5.6.2/docs/Control-Monad-Signatures.html#t:CallCC)
+-- provided that @f@ is quasi-algebraic. More specifically, for any @g@, we must have:
+--
+-- > 'join' '$' f (\exit -> 'pure' '$' g (exit '.' 'pure') = f g
+--
+-- 'ContT.callCC' is quasi-algebraic; furthermore, for any quasi-algebraic @f@,
+-- @'liftCallCC' f@ is also quasi-algebraic. 
+--
+-- = See also
+--
+-- * [Proof of quasi-algebraic
+-- properties](https://gist.github.com/KingoftheHomeless/5927257cc7f6f8a2da685a2045dac204)
+-- * [Original issue](https://github.com/haskell/mtl/issues/77)
+--
+-- @since 2.3.1
+liftCallCC :: 
+  forall (t :: (Type -> Type) -> Type -> Type) (m :: Type -> Type) (a :: Type) (b :: Type) . 
+  (MonadTrans t, Monad m, forall (m' :: Type -> Type) . Monad m' => Monad (t m')) => 
+  CallCC m (t m a) b -> CallCC (t m) a b
+liftCallCC f g = join . lift . f $ \exit -> pure $ g (lift . exit . pure)

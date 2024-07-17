@@ -1,4 +1,12 @@
 # Changelog for [`hpc` package](http://hackage.haskell.org/package/hpc)
+## 0.6.2.0  *September 2021*
+
+  * Addition of `NFData` instances for `Tix` and `TixModule`
+
+## 0.6.1.0  *October 2019*
+
+  * Addition of `readFileUtf8` and `writeFileUtf8` functions.
+  * Ensure `.tix` files read and written in UTF-8, regadless of the system locale.
 
 ## 0.6.0.3  *May 2016*
 

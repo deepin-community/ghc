@@ -2,7 +2,7 @@
 
 #if __GLASGOW_HASKELL__ >= 709
 {-# LANGUAGE Safe #-}
-#elif __GLASGOW_HASKELL__ >= 701
+#else
 {-# LANGUAGE Trustworthy #-}
 #endif
 -----------------------------------------------------------------------------
@@ -31,10 +31,9 @@ import System.Win32.Types
 #if MIN_VERSION_base(4,6,0)
 import Control.Exception (catch)
 #endif
-import Data.List (isPrefixOf, isInfixOf, isSuffixOf)
+import Data.List (isInfixOf)
 import Foreign
 import Foreign.C.Types
-import System.FilePath (takeFileName)
 
 #if __GLASGOW_HASKELL__ < 711
 #let alignment t = "%lu", (unsigned long)offsetof(struct {char x__; t (y__); }, y__)
@@ -91,11 +90,8 @@ isMinTTYCompat h = do
     return False
 
 cygwinMSYSCheck :: String -> Bool
-cygwinMSYSCheck fn = ("cygwin-" `isPrefixOf` fn' || "msys-" `isPrefixOf` fn') &&
-            "-pty" `isInfixOf` fn' &&
-            "-master" `isSuffixOf` fn'
-  where
-    fn' = takeFileName fn
+cygwinMSYSCheck fn = ("cygwin-" `isInfixOf` fn || "msys-" `isInfixOf` fn) &&
+            "-pty" `isInfixOf` fn
 -- Note that GetFileInformationByHandleEx might return a filepath like:
 --
 --    \msys-dd50a72ab4668b33-pty1-to-master
@@ -105,8 +101,16 @@ cygwinMSYSCheck fn = ("cygwin-" `isPrefixOf` fn' || "msys-" `isPrefixOf` fn') &&
 --    \Device\NamedPipe\msys-dd50a72ab4668b33-pty1-to-master
 --
 -- This means we can't rely on "\cygwin-" or "\msys-" being at the very start
--- of the filepath. Therefore, we must take care to first call takeFileName
--- before checking for "cygwin" or "msys" at the start using `isPrefixOf`.
+-- of the filepath. As a result, we use `isPrefixOf` to check for "cygwin" and
+-- "msys".
+--
+-- It's unclear if "-master" will always appear in the filepath name. Recent
+-- versions of MinTTY have been known to give filepaths like this (#186):
+--
+--    \msys-dd50a72ab4668b33-pty0-to-master-nat
+--
+-- Just in case MinTTY ever changes this convention, we don't bother checking
+-- for the presence of "-master" in the filepath name at all.
 
 getFileNameByHandle :: HANDLE -> IO String
 getFileNameByHandle h = do
@@ -153,7 +157,7 @@ objectNameInformation = #const ObjectNameInformation
 
 type F_NtQueryObject = HANDLE -> CInt -> Ptr OBJECT_NAME_INFORMATION
                      -> ULONG -> Ptr ULONG -> IO NTSTATUS
-                     
+
 foreign import WINDOWS_CCONV "dynamic"
   mk_NtQueryObject :: FunPtr F_NtQueryObject -> F_NtQueryObject
 

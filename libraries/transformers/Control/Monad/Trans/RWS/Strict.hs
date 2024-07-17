@@ -1,8 +1,9 @@
 {-# LANGUAGE CPP #-}
 #if __GLASGOW_HASKELL__ >= 702
 {-# LANGUAGE Safe #-}
+{-# LANGUAGE DeriveGeneric #-}
 #endif
-#if __GLASGOW_HASKELL__ >= 710
+#if __GLASGOW_HASKELL__ >= 710 && __GLASGOW_HASKELL__ < 802
 {-# LANGUAGE AutoDeriveTypeable #-}
 #endif
 -----------------------------------------------------------------------------
@@ -16,7 +17,9 @@
 -- Stability   :  experimental
 -- Portability :  portable
 --
--- A monad transformer that combines 'ReaderT', 'WriterT' and 'StateT'.
+-- A monad transformer that combines 'Control.Monad.Trans.Reader.ReaderT',
+-- 'Control.Monad.Trans.Writer.Strict.WriterT' and
+-- 'Control.Monad.Trans.State.Strict.StateT'.
 -- This version is strict; for a lazy version with the same interface,
 -- see "Control.Monad.Trans.RWS.Lazy".
 -- Although the output is built strictly, it is not possible to
@@ -77,7 +80,12 @@ import Control.Monad
 import qualified Control.Monad.Fail as Fail
 #endif
 import Control.Monad.Fix
+#if !(MIN_VERSION_base(4,8,0))
 import Data.Monoid
+#endif
+#if __GLASGOW_HASKELL__ >= 704
+import GHC.Generics
+#endif
 
 -- | A monad containing an environment of type @r@, output of type @w@
 -- and an updatable state of type @s@.
@@ -138,6 +146,9 @@ withRWS = withRWST
 -- collecting an output of type @w@ and updating a state of type @s@
 -- to an inner monad @m@.
 newtype RWST r w s m a = RWST { runRWST :: r -> s -> m (a, s, w) }
+#if __GLASGOW_HASKELL__ >= 704
+    deriving (Generic)
+#endif
 
 -- | Evaluate a computation with the given initial state and environment,
 -- returning the final value and output, discarding the final state.

@@ -20,13 +20,13 @@ import qualified GetHomeDirectory002
 import qualified GetPermissions001
 import qualified LongPaths
 import qualified MakeAbsolute
+import qualified MinimizeNameConflicts
 import qualified PathIsSymbolicLink
 import qualified RemoveDirectoryRecursive001
 import qualified RemovePathForcibly
 import qualified RenameDirectory
 import qualified RenameFile001
 import qualified RenamePath
-import qualified Safe
 import qualified Simplify
 import qualified T8482
 import qualified WithCurrentDirectory
@@ -54,13 +54,13 @@ main = T.testMain $ \ _t -> do
   T.isolatedRun _t "GetPermissions001" GetPermissions001.main
   T.isolatedRun _t "LongPaths" LongPaths.main
   T.isolatedRun _t "MakeAbsolute" MakeAbsolute.main
+  T.isolatedRun _t "MinimizeNameConflicts" MinimizeNameConflicts.main
   T.isolatedRun _t "PathIsSymbolicLink" PathIsSymbolicLink.main
   T.isolatedRun _t "RemoveDirectoryRecursive001" RemoveDirectoryRecursive001.main
   T.isolatedRun _t "RemovePathForcibly" RemovePathForcibly.main
   T.isolatedRun _t "RenameDirectory" RenameDirectory.main
   T.isolatedRun _t "RenameFile001" RenameFile001.main
   T.isolatedRun _t "RenamePath" RenamePath.main
-  T.isolatedRun _t "Safe" Safe.main
   T.isolatedRun _t "Simplify" Simplify.main
   T.isolatedRun _t "T8482" T8482.main
   T.isolatedRun _t "WithCurrentDirectory" WithCurrentDirectory.main

@@ -10,8 +10,9 @@
 module Data.Functor.Utils where
 
 import Data.Coerce (Coercible, coerce)
-import GHC.Base ( Applicative(..), Functor(..), Maybe(..), Monoid(..), Ord(..)
-                , Semigroup(..), ($), otherwise )
+import GHC.Base ( Applicative(..), Functor(..), Maybe(..), Monad (..)
+                , Monoid(..), Ord(..), Semigroup(..), ($), liftM, otherwise )
+import qualified GHC.List as List
 
 -- We don't expose Max and Min because, as Edward Kmett pointed out to me,
 -- there are two reasonable ways to define them. One way is to use Maybe, as we
@@ -34,6 +35,10 @@ instance Ord a => Semigroup (Max a) where
 -- | @since 4.8.0.0
 instance Ord a => Monoid (Max a) where
     mempty = Max Nothing
+    -- By default, we would get a lazy right fold. This forces the use of a strict
+    -- left fold instead.
+    mconcat = List.foldl' (<>) mempty
+    {-# INLINE mconcat #-}
 
 -- | @since 4.11.0.0
 instance Ord a => Semigroup (Min a) where
@@ -47,6 +52,10 @@ instance Ord a => Semigroup (Min a) where
 -- | @since 4.8.0.0
 instance Ord a => Monoid (Min a) where
     mempty = Min Nothing
+    -- By default, we would get a lazy right fold. This forces the use of a strict
+    -- left fold instead.
+    mconcat = List.foldl' (<>) mempty
+    {-# INLINE mconcat #-}
 
 -- left-to-right state-transforming monad
 newtype StateL s a = StateL { runStateL :: s -> (s, a) }
@@ -85,6 +94,37 @@ instance Applicative (StateR s) where
         let (s', y) = ky s
             (s'', x) = kx s'
         in (s'', f x y)
+
+-- | A state transformer monad parameterized by the state and inner monad.
+-- The implementation is copied from the transformers package with the
+-- return tuple swapped.
+--
+-- @since 4.18.0.0
+newtype StateT s m a = StateT { runStateT :: s -> m (s, a) }
+
+-- | @since 4.18.0.0
+instance Monad m => Functor (StateT s m) where
+    fmap = liftM
+    {-# INLINE fmap #-}
+
+-- | @since 4.18.0.0
+instance Monad m => Applicative (StateT s m) where
+    pure a = StateT $ \ s -> return (s, a)
+    {-# INLINE pure #-}
+    StateT mf <*> StateT mx = StateT $ \ s -> do
+        (s', f) <- mf s
+        (s'', x) <- mx s'
+        return (s'', f x)
+    {-# INLINE (<*>) #-}
+    m *> k = m >>= \_ -> k
+    {-# INLINE (*>) #-}
+
+-- | @since 4.18.0.0
+instance (Monad m) => Monad (StateT s m) where
+    m >>= k  = StateT $ \ s -> do
+        (s', a) <- runStateT m s
+        runStateT (k a) s'
+    {-# INLINE (>>=) #-}
 
 -- See Note [Function coercion]
 (#.) :: Coercible b c => (b -> c) -> (a -> b) -> (a -> c)

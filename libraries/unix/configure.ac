@@ -1,5 +1,5 @@
-AC_PREREQ([2.60])
-AC_INIT([Haskell unix package], [2.0], [libraries@haskell.org], [unix])
+AC_PREREQ([2.69])
+AC_INIT([Haskell unix package],[2.0],[libraries@haskell.org],[unix])
 
 # Safety check: Ensure that we are in the correct source directory.
 AC_CONFIG_SRCDIR([include/HsUnix.h])
@@ -10,10 +10,6 @@ dnl make extensions visible to allow feature-tests to detect them lateron
 AC_USE_SYSTEM_EXTENSIONS
 
 AC_CONFIG_HEADERS([include/HsUnixConfig.h])
-
-# Is this a Unix system?
-AC_CHECK_HEADER([dlfcn.h], [BUILD_PACKAGE_BOOL=True], [BUILD_PACKAGE_BOOL=False])
-AC_SUBST([BUILD_PACKAGE_BOOL])
 
 AC_C_CONST
 
@@ -27,6 +23,7 @@ AC_SYS_LARGEFILE
 AC_CHECK_HEADERS([dirent.h fcntl.h grp.h limits.h pwd.h signal.h string.h])
 AC_CHECK_HEADERS([sys/resource.h sys/stat.h sys/times.h sys/time.h])
 AC_CHECK_HEADERS([sys/utsname.h sys/wait.h])
+AC_CHECK_HEADERS([sys/sysmacros.h])
 AC_CHECK_HEADERS([bsd/libutil.h libutil.h pty.h utmp.h])
 AC_CHECK_HEADERS([termios.h time.h unistd.h utime.h])
 
@@ -37,6 +34,53 @@ AC_CHECK_FUNCS([nanosleep])
 AC_CHECK_FUNCS([ptsname])
 AC_CHECK_FUNCS([setitimer])
 AC_CHECK_FUNCS([readdir_r])
+
+AC_CHECK_FUNCS([alarm])
+AC_CHECK_FUNCS([dup])
+AC_CHECK_FUNCS([execv])
+AC_CHECK_FUNCS([getpid])
+AC_CHECK_FUNCS([mknod])
+AC_CHECK_FUNCS([mkstemp])
+AC_CHECK_FUNCS([pipe])
+AC_CHECK_FUNCS([times])
+AC_CHECK_FUNCS([chown fchdir fchmod])
+
+AC_CHECK_TYPE([struct rlimit],[AC_DEFINE([HAVE_STRUCT_RLIMIT],[1],[HAVE_STRUCT_RLIMIT])],[],[#include <sys/resource.h>])
+
+# check for statx
+AC_CHECK_FUNC([statx], [AC_DEFINE([HAVE_STATX_FUN],[1],[HAVE_STATX_FUN])],[],[#include <sys/stat.h>])
+AC_CHECK_TYPE([struct statx],[AC_DEFINE([HAVE_STRUCT_STATX],[1],[HAVE_STRUCT_STATX])],[],[#include <sys/stat.h>])
+AC_MSG_CHECKING(for statx.stx_mnt_id)
+AC_LINK_IFELSE([
+AC_LANG_PROGRAM([[#include <sys/stat.h>]],
+[[
+struct statx statxbuf;
+statx(0, "", 0, STATX_BASIC_STATS | STATX_MNT_ID, &statxbuf);
+return statxbuf.stx_mnt_id;
+]])],
+[
+AC_MSG_RESULT(yes)
+AC_DEFINE([HAVE_STATX_MNT_ID], [1], [Define to 1 if statx.stx_mnt_id is available.])
+],
+[
+AC_MSG_RESULT(no)
+]
+)
+
+
+AC_MSG_CHECKING(for F_GETLK from fcntl.h)
+AC_EGREP_CPP(yes,
+[
+ #include <fcntl.h>
+ #ifdef F_GETLK
+        yes
+ #endif
+], [
+  AC_MSG_RESULT(yes)
+  AC_DEFINE([HAVE_F_GETLK], [1], [Define to 1 if F_GETLK is available.])
+], [
+  AC_MSG_RESULT(no)
+  ])
 
 dnl not available on android so check for it
 AC_CANONICAL_TARGET
@@ -49,6 +93,12 @@ AC_CHECK_FUNCS([_NSGetEnviron])
 dnl This is e.g. available as a GNU extension in glibc 2.11+
 AC_CHECK_DECLS([execvpe])
 AC_CHECK_FUNCS([execvpe])
+
+AC_CHECK_DECLS([CLOCKS_PER_SEC], [AC_DEFINE([HAVE_CLOCKS_PER_SEC],[1],[Define to 1 if you have the CLOCKS_PER_SEC macro.])], [], [AC_INCLUDES_DEFAULT
+#ifdef HAVE_TIME_H
+#include <time.h>
+#endif
+])
 
 AC_CHECK_MEMBERS([struct stat.st_atim])
 AC_CHECK_MEMBERS([struct stat.st_mtim])
@@ -66,6 +116,9 @@ AC_CHECK_MEMBERS([struct stat.st_uatime])
 AC_CHECK_MEMBERS([struct stat.st_umtime])
 AC_CHECK_MEMBERS([struct stat.st_uctime])
 
+AC_CHECK_MEMBERS([struct stat.st_blocks])
+AC_CHECK_MEMBERS([struct stat.st_blksize])
+
 AC_CHECK_MEMBER([struct passwd.pw_gecos], [], [AC_DEFINE([HAVE_NO_PASSWD_PW_GECOS],[],[Ignore the pw_gecos member of passwd where it does not exist])], [[#include <pwd.h>]])
 
 # Functions for changing file timestamps
@@ -74,7 +127,7 @@ AC_CHECK_FUNCS([lutimes futimes])
 
 # Additional temp functions
 dnl androids bionic doesn't have mkstemps
-# We explicilty check for android, as the check AC_CHECK_FUNCS performs returns "yes" for mkstemps
+# We explicitly check for android, as the check AC_CHECK_FUNCS performs returns "yes" for mkstemps
 # when targetting android. See similar conditionals for seekdir and telldir.
 AS_CASE([$target_os],[*-android*],[AC_CHECK_FUNCS([mkdtemp])],[AC_CHECK_FUNCS([mkstemps mkdtemp])])
 
@@ -181,7 +234,7 @@ AC_EGREP_CPP(yes,
   AC_DEFINE([HAVE_RTLDNEXT], [1], [Define to 1 if we can see RTLD_NEXT in dlfcn.h.])
 ], [
   AC_MSG_RESULT(no)
-  ])    
+  ])
 
 AC_MSG_CHECKING(for RTLD_DEFAULT from dlfcn.h)
 AC_EGREP_CPP(yes,
@@ -195,7 +248,7 @@ AC_EGREP_CPP(yes,
   AC_DEFINE([HAVE_RTLDDEFAULT], [1], [Define to 1 if RTLD_DEFAULT is available.])
 ], [
   AC_MSG_RESULT(no)
-  ])    
+  ])
 
 AC_CHECK_FUNCS(openpty,,
    AC_CHECK_LIB(util,openpty,
@@ -233,6 +286,10 @@ AC_CANONICAL_TARGET
 AC_SEARCH_LIBS(sem_close, pthread,
     [EXTRA_LIBS="$EXTRA_LIBS $ac_lib"],
     [AC_MSG_NOTICE([Not found])])
+
+AC_CHECK_DECLS([sem_getvalue],[AC_DEFINE([HAVE_SEM_GETVALUE],[1],[Define to 1 if you have the `sem_getvalue' function.])],[],[AC_INCLUDES_DEFAULT
+#include <semaphore.h>
+])
 
 AC_SUBST([EXTRA_LIBS])
 AC_CONFIG_FILES([unix.buildinfo])

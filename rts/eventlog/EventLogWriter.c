@@ -6,7 +6,7 @@
  *
  * ---------------------------------------------------------------------------*/
 
-#include "PosixSource.h"
+#include "rts/PosixSource.h"
 #include "Rts.h"
 
 #include "RtsUtils.h"
@@ -27,6 +27,17 @@ static pid_t event_log_pid = -1;
 
 // File for logging events
 static FILE *event_log_file = NULL;
+
+#if defined(THREADED_RTS)
+// Protects event_log_file
+static Mutex event_log_mutex;
+
+static void acquire_event_log_lock(void) { ACQUIRE_LOCK(&event_log_mutex); }
+static void release_event_log_lock(void) { RELEASE_LOCK(&event_log_mutex); }
+#else
+static void acquire_event_log_lock(void) {}
+static void release_event_log_lock(void) {}
+#endif
 
 static void initEventLogFileWriter(void);
 static bool writeEventLogFile(void *eventlog, size_t eventlog_size);
@@ -57,6 +68,9 @@ static char *outputFileName(void)
                                         + 10 /* .eventlog */,
                                         "initEventLogFileWriter");
 
+#if !defined(HAVE_GETPID)
+            sprintf(filename, "%s.eventlog", prog);
+#else
         if (event_log_pid == -1) { // #4512
             // Single process
             sprintf(filename, "%s.eventlog", prog);
@@ -71,6 +85,7 @@ static char *outputFileName(void)
             sprintf(filename, "%s.%" FMT_Word64 ".eventlog",
                     prog, (StgWord64)event_log_pid);
         }
+#endif
         stgFree(prog);
         return filename;
     }
@@ -82,13 +97,16 @@ initEventLogFileWriter(void)
     char *event_log_filename = outputFileName();
 
     /* Open event log file for writing. */
-    if ((event_log_file = __rts_fopen(event_log_filename, "wb")) == NULL) {
+    if ((event_log_file = __rts_fopen(event_log_filename, "wb+")) == NULL) {
         sysErrorBelch(
             "initEventLogFileWriter: can't open %s", event_log_filename);
         stg_exit(EXIT_FAILURE);
     }
 
     stgFree(event_log_filename);
+#if defined(THREADED_RTS)
+    initMutex(&event_log_mutex);
+#endif
 }
 
 static bool
@@ -97,15 +115,19 @@ writeEventLogFile(void *eventlog, size_t eventlog_size)
     unsigned char *begin = eventlog;
     size_t remain = eventlog_size;
 
+    acquire_event_log_lock();
     while (remain > 0) {
         size_t written = fwrite(begin, 1, remain, event_log_file);
         if (written == 0) {
+            release_event_log_lock();
             return false;
         }
         remain -= written;
         begin += written;
     }
+    release_event_log_lock();
 
+    flushEventLogFile ();
     return true;
 }
 
@@ -122,12 +144,37 @@ stopEventLogFileWriter(void)
 {
     if (event_log_file != NULL) {
         fclose(event_log_file);
+        event_log_file = NULL;
     }
+#if defined(THREADED_RTS)
+    closeMutex(&event_log_mutex);
+#endif
 }
+
+static void
+initEventLogFileWriterNoop(void) {}
+
+static bool
+writeEventLogFileNoop(void *eventlog STG_UNUSED, size_t eventlog_size STG_UNUSED) {
+    return true; // writes succeed always
+}
+
+static void
+flushEventLogFileNoop(void) {}
+
+static void
+stopEventLogFileWriterNoop(void) {}
 
 const EventLogWriter FileEventLogWriter = {
     .initEventLogWriter = initEventLogFileWriter,
     .writeEventLog = writeEventLogFile,
     .flushEventLog = flushEventLogFile,
     .stopEventLogWriter = stopEventLogFileWriter
+};
+
+const EventLogWriter NullEventLogWriter = {
+    .initEventLogWriter = initEventLogFileWriterNoop,
+    .writeEventLog = writeEventLogFileNoop,
+    .flushEventLog = flushEventLogFileNoop,
+    .stopEventLogWriter = stopEventLogFileWriterNoop
 };

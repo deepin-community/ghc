@@ -83,10 +83,15 @@
 #include <utmp.h>
 #endif
 
+#if defined(HAVE_DLFCN_H)
 #include <dlfcn.h>
+#endif
 
 #ifdef HAVE_SIGNAL_H
 #include <signal.h>
+#endif
+#ifdef HAVE_SYS_SYSMACROS_H
+#include <sys/sysmacros.h>
 #endif
 
 /* defined in rts/posix/Signals.c */
@@ -116,5 +121,13 @@ fall back to O_FSYNC, which should be the same */
 
 // push a SVR4 STREAMS module; do nothing if STREAMS not available
 int __hsunix_push_module(int fd, const char *module);
+
+#ifdef HAVE_CLOCKS_PER_SEC
+clock_t __hsunix_clocks_per_second (void);
+#endif
+
+#if defined(HAVE_SYS_STAT_H) && defined(HAVE_STATX_FUN) && defined(HAVE_STRUCT_STATX)
+#define HAVE_STATX 1
+#endif
 
 #endif

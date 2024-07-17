@@ -1,8 +1,4 @@
-#if __GLASGOW_HASKELL__ >= 709
 {-# LANGUAGE Safe #-}
-#else
-{-# LANGUAGE Trustworthy #-}
-#endif
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  System.Posix.DynamicLinker
@@ -56,17 +52,15 @@ import System.Posix.DynamicLinker.Prim
 #include "HsUnix.h"
 
 import Control.Exception        ( bracket )
-import Control.Monad    ( liftM )
 import Foreign
 import System.Posix.Internals ( withFilePath )
 
 dlopen :: FilePath -> [RTLDFlags] -> IO DL
-dlopen path flags = do
-  withFilePath path $ \ p -> do
-    liftM DLHandle $ throwDLErrorIf "dlopen" (== nullPtr) $ c_dlopen p (packRTLDFlags flags)
+dlopen path flags = withFilePath path $ \p -> DLHandle <$>
+  throwDLErrorIf "dlopen" (== nullPtr) (c_dlopen p (packRTLDFlags flags))
 
-withDL :: String -> [RTLDFlags] -> (DL -> IO a) -> IO a
+withDL :: FilePath -> [RTLDFlags] -> (DL -> IO a) -> IO a
 withDL file flags f = bracket (dlopen file flags) (dlclose) f
 
-withDL_ :: String -> [RTLDFlags] -> (DL -> IO a) -> IO ()
+withDL_ :: FilePath -> [RTLDFlags] -> (DL -> IO a) -> IO ()
 withDL_ file flags f = withDL file flags f >> return ()

@@ -1,13 +1,15 @@
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE CPP #-}
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE Trustworthy #-}
-{-# LANGUAGE BangPatterns
-           , CPP
-           , ExistentialQuantification
-           , NoImplicitPrelude
-           , TypeSynonymInstances
-           , FlexibleInstances
-  #-}
 
+-- TODO: use the new Windows IO manager
 module GHC.Event.TimerManager
+#if defined(javascript_HOST_ARCH)
+    () where
+#else
     ( -- * Types
       TimerManager
 
@@ -51,7 +53,8 @@ import GHC.Real (quot, fromIntegral)
 import GHC.Show (Show(..))
 import GHC.Event.Control
 import GHC.Event.Internal (Backend, Event, evtRead, Timeout(..))
-import GHC.Event.Unique (Unique, UniqueSource, newSource, newUnique)
+import GHC.Event.Unique (UniqueSource, newSource, newUnique)
+import GHC.Event.TimeOut
 import System.Posix.Types (Fd)
 
 import qualified GHC.Event.Internal as I
@@ -66,13 +69,6 @@ import qualified GHC.Event.Poll   as Poll
 ------------------------------------------------------------------------
 -- Types
 
--- | A timeout registration cookie.
-newtype TimeoutKey   = TK Unique
-    deriving Eq -- ^ @since 4.7.0.0
-
--- | Callback invoked on timeout events.
-type TimeoutCallback = IO ()
-
 data State = Created
            | Running
            | Dying
@@ -80,12 +76,6 @@ data State = Created
              deriving ( Eq   -- ^ @since 4.7.0.0
                       , Show -- ^ @since 4.7.0.0
                       )
-
--- | A priority search queue, with timeouts as priorities.
-type TimeoutQueue = Q.PSQ TimeoutCallback
-
--- | An edit to apply to a 'TimeoutQueue'.
-type TimeoutEdit = TimeoutQueue -> TimeoutQueue
 
 -- | The event manager state.
 data TimerManager = TimerManager
@@ -225,6 +215,10 @@ expirationTime us = do
 -- returned 'TimeoutKey' can be used to later unregister or update the
 -- timeout.  The timeout is automatically unregistered after the given
 -- time has passed.
+--
+-- Be careful not to exceed @maxBound :: Int@, which on 32-bit machines is only
+-- 2147483647 μs, less than 36 minutes.
+--
 registerTimeout :: TimerManager -> Int -> TimeoutCallback -> IO TimeoutKey
 registerTimeout mgr us cb = do
   !key <- newUnique (emUniqueSource mgr)
@@ -239,11 +233,15 @@ registerTimeout mgr us cb = do
 
 -- | Unregister an active timeout.
 unregisterTimeout :: TimerManager -> TimeoutKey -> IO ()
-unregisterTimeout mgr (TK key) = do
+unregisterTimeout mgr (TK key) =
   editTimeouts mgr (Q.delete key)
 
 -- | Update an active timeout to fire in the given number of
 -- microseconds.
+--
+-- Be careful not to exceed @maxBound :: Int@, which on 32-bit machines is only
+-- 2147483647 μs, less than 36 minutes.
+--
 updateTimeout :: TimerManager -> TimeoutKey -> Int -> IO ()
 updateTimeout mgr (TK key) us = do
   expTime <- expirationTime us
@@ -266,3 +264,5 @@ editTimeouts mgr g = do
                       -- minimum element didn't change.
                       t0 /= t1
                     _ -> True
+
+#endif

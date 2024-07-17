@@ -1,8 +1,12 @@
-{-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE Safe #-}
+-- Needed because the CPSed versions of Writer and State are secretly State
+-- wrappers, which don't force such constraints, even though they should legally
+-- be there.
+{-# OPTIONS_GHC -Wno-redundant-constraints #-}
 
 {- |
 Module      :  Control.Monad.Error.Class
@@ -39,36 +43,38 @@ The Error monad (also called the Exception monad).
     Andy Gill (<http://web.cecs.pdx.edu/~andy/>)
 -}
 module Control.Monad.Error.Class (
-    Error(..),
     MonadError(..),
     liftEither,
+    tryError,
+    withError,
+    handleError,
+    mapError,
+    modifyError,
   ) where
 
-import Control.Monad.Trans.Except (Except, ExceptT)
-import Control.Monad.Trans.Error (Error(..), ErrorT)
-import qualified Control.Monad.Trans.Except as ExceptT (throwE, catchE)
-import qualified Control.Monad.Trans.Error as ErrorT (throwError, catchError)
-import Control.Monad.Trans.Identity as Identity
-import Control.Monad.Trans.List as List
-import Control.Monad.Trans.Maybe as Maybe
-import Control.Monad.Trans.Reader as Reader
-import Control.Monad.Trans.RWS.Lazy as LazyRWS
-import Control.Monad.Trans.RWS.Strict as StrictRWS
-import Control.Monad.Trans.State.Lazy as LazyState
-import Control.Monad.Trans.State.Strict as StrictState
-import Control.Monad.Trans.Writer.Lazy as LazyWriter
-import Control.Monad.Trans.Writer.Strict as StrictWriter
-
+import Control.Monad.Trans.Except (ExceptT)
+import qualified Control.Monad.Trans.Except as ExceptT (catchE, runExceptT, throwE)
+import Control.Monad.Trans.Identity (IdentityT)
+import qualified Control.Monad.Trans.Identity as Identity
+import Control.Monad.Trans.Maybe (MaybeT)
+import qualified Control.Monad.Trans.Maybe as Maybe
+import Control.Monad.Trans.Reader (ReaderT)
+import qualified Control.Monad.Trans.Reader as Reader
+import qualified Control.Monad.Trans.RWS.Lazy as LazyRWS
+import qualified Control.Monad.Trans.RWS.Strict as StrictRWS
+import qualified Control.Monad.Trans.State.Lazy as LazyState
+import qualified Control.Monad.Trans.State.Strict as StrictState
+import qualified Control.Monad.Trans.Writer.Lazy as LazyWriter
+import qualified Control.Monad.Trans.Writer.Strict as StrictWriter
+import Control.Monad.Trans.Accum (AccumT)
+import qualified Control.Monad.Trans.Accum as Accum
+import qualified Control.Monad.Trans.RWS.CPS as CPSRWS
+import qualified Control.Monad.Trans.Writer.CPS as CPSWriter
 import Control.Monad.Trans.Class (lift)
 import Control.Exception (IOException, catch, ioError)
-import Control.Monad
-
-#if defined(__GLASGOW_HASKELL__) && __GLASGOW_HASKELL__ < 707
-import Control.Monad.Instances ()
-#endif
-
-import Data.Monoid
-import Prelude (Either(..), Maybe(..), either, (.), IO)
+import Control.Monad (Monad)
+import Data.Monoid (Monoid)
+import Prelude (Either (Left, Right), Maybe (Nothing), either, flip, (.), IO, pure, (<$>), (>>=))
 
 {- |
 The strategy of combining computations that can throw exceptions
@@ -102,9 +108,7 @@ class (Monad m) => MonadError e m | m -> e where
     Note that @handler@ and the do-block must have the same return type.
     -}
     catchError :: m a -> (e -> m a) -> m a
-#if __GLASGOW_HASKELL__ >= 707
     {-# MINIMAL throwError, catchError #-}
-#endif
 
 {- |
 Lifts an @'Either' e@ into any @'MonadError' e@.
@@ -116,7 +120,7 @@ where @action1@ returns an 'Either' to represent errors.
 @since 2.2.2
 -}
 liftEither :: MonadError e m => Either e a -> m a
-liftEither = either throwError return
+liftEither = either throwError pure
 
 instance MonadError IOException IO where
     throwError = ioError
@@ -136,10 +140,6 @@ instance MonadError e (Either e) where
     Left  l `catchError` h = h l
     Right r `catchError` _ = Right r
 
-instance (Monad m, Error e) => MonadError e (ErrorT e m) where
-    throwError = ErrorT.throwError
-    catchError = ErrorT.catchError
-
 {- | @since 2.2 -}
 instance Monad m => MonadError e (ExceptT e m) where
     throwError = ExceptT.throwE
@@ -154,10 +154,6 @@ instance Monad m => MonadError e (ExceptT e m) where
 instance MonadError e m => MonadError e (IdentityT m) where
     throwError = lift . throwError
     catchError = Identity.liftCatch catchError
-
-instance MonadError e m => MonadError e (ListT m) where
-    throwError = lift . throwError
-    catchError = List.liftCatch catchError
 
 instance MonadError e m => MonadError e (MaybeT m) where
     throwError = lift . throwError
@@ -190,3 +186,84 @@ instance (Monoid w, MonadError e m) => MonadError e (LazyWriter.WriterT w m) whe
 instance (Monoid w, MonadError e m) => MonadError e (StrictWriter.WriterT w m) where
     throwError = lift . throwError
     catchError = StrictWriter.liftCatch catchError
+
+-- | @since 2.3
+instance (Monoid w, MonadError e m) => MonadError e (CPSRWS.RWST r w s m) where
+    throwError = lift . throwError
+    catchError = CPSRWS.liftCatch catchError
+
+-- | @since 2.3
+instance (Monoid w, MonadError e m) => MonadError e (CPSWriter.WriterT w m) where
+    throwError = lift . throwError
+    catchError = CPSWriter.liftCatch catchError
+
+-- | @since 2.3
+instance
+  ( Monoid w
+  , MonadError e m
+  ) => MonadError e (AccumT w m) where
+    throwError = lift . throwError
+    catchError = Accum.liftCatch catchError
+
+-- | 'MonadError' analogue to the 'Control.Exception.try' function.
+tryError :: MonadError e m => m a -> m (Either e a)
+tryError action = (Right <$> action) `catchError` (pure . Left)
+
+-- | 'MonadError' analogue to the 'withExceptT' function.
+-- Modify the value (but not the type) of an error.  The type is
+-- fixed because of the functional dependency @m -> e@.  If you need
+-- to change the type of @e@ use 'mapError' or 'modifyError'.
+withError :: MonadError e m => (e -> e) -> m a -> m a
+withError f action = tryError action >>= either (throwError . f) pure
+
+-- | As 'handle' is flipped 'Control.Exception.catch', 'handleError'
+-- is flipped 'catchError'.
+handleError :: MonadError e m => (e -> m a) -> m a -> m a
+handleError = flip catchError
+
+-- | 'MonadError' analogue of the 'mapExceptT' function.  The
+-- computation is unwrapped, a function is applied to the @Either@, and
+-- the result is lifted into the second 'MonadError' instance.
+mapError :: (MonadError e m, MonadError e' n) => (m (Either e a) -> n (Either e' b)) -> m a -> n b
+mapError f action = f (tryError action) >>= liftEither
+
+{- |
+A different 'MonadError' analogue to the 'withExceptT' function.
+Modify the value (and possibly the type) of an error in an @ExceptT@-transformed
+monad, while stripping the @ExceptT@ layer.
+
+This is useful for adapting the 'MonadError' constraint of a computation.
+
+For example:
+
+> data DatabaseError = ...
+>
+> performDatabaseQuery :: (MonadError DatabaseError m, ...) => m PersistedValue
+>
+> data AppError
+>   = MkDatabaseError DatabaseError
+>   | ...
+>
+> app :: (MonadError AppError m, ...) => m ()
+
+Given these types, @performDatabaseQuery@ cannot be used directly inside
+@app@, because the error types don't match. Using 'modifyError', an equivalent
+function with a different error type can be constructed:
+
+> performDatabaseQuery' :: (MonadError AppError m, ...) => m PersistedValue
+> performDatabaseQuery' = modifyError MkDatabaseError performDatabaseQuery
+
+Since the error types do match, @performDatabaseQuery'@ _can_ be used in @app@,
+assuming all other constraints carry over.
+
+This works by instantiating the @m@ in the type of @performDatabaseQuery@ to
+@ExceptT DatabaseError m'@, which satisfies the @MonadError DatabaseError@
+constraint. Immediately, the @ExceptT DatabaseError@ layer is unwrapped,
+producing 'Either' a @DatabaseError@ or a @PersistedValue@. If it's the former,
+the error is wrapped in @MkDatabaseError@ and re-thrown in the inner monad,
+otherwise the result value is returned.
+
+@since 2.3.1
+-}
+modifyError :: MonadError e' m => (e -> e') -> ExceptT e m a -> m a
+modifyError f m = ExceptT.runExceptT m >>= either (throwError . f) pure

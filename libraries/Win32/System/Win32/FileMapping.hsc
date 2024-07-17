@@ -1,4 +1,6 @@
-#if __GLASGOW_HASKELL__ >= 701
+#if __GLASGOW_HASKELL__ >= 709
+{-# LANGUAGE Safe #-}
+#else
 {-# LANGUAGE Trustworthy #-}
 #endif
 -----------------------------------------------------------------------------
@@ -14,9 +16,37 @@
 -- A collection of FFI declarations for interfacing with Win32 mapped files.
 --
 -----------------------------------------------------------------------------
-module System.Win32.FileMapping where
+module System.Win32.FileMapping
+    ( mapFile
+    , MappedObject(..)
+    , withMappedFile
+    , withMappedArea
+      -- * Enums
+      -- ** Section protection flags
+    , ProtectSectionFlags
+    , sEC_COMMIT
+    , sEC_IMAGE
+    , sEC_NOCACHE
+    , sEC_RESERVE
+      -- ** Access falgs
+    , FileMapAccess
+    , fILE_MAP_ALL_ACCESS
+    , fILE_MAP_COPY
+    , fILE_MAP_READ
+    , fILE_MAP_WRITE
+    , fILE_SHARE_WRITE
 
-import System.Win32.Types   ( HANDLE, DWORD, BOOL, SIZE_T, LPCTSTR, withTString
+      -- * Mapping files
+    , createFileMapping
+    , openFileMapping
+    , mapViewOfFileEx
+    , mapViewOfFile
+    , unmapViewOfFile
+    ) where
+
+
+import System.Win32.FileMapping.Internal
+import System.Win32.Types   ( HANDLE, BOOL, SIZE_T, withTString
                             , failIf, failIfNull, DDWORD, ddwordToDwords
                             , iNVALID_HANDLE_VALUE )
 import System.Win32.Mem
@@ -24,11 +54,8 @@ import System.Win32.File
 import System.Win32.Info
 
 import Control.Exception        ( mask_, bracket )
-import Data.ByteString          ( ByteString )
-import Data.ByteString.Internal ( fromForeignPtr )
-import Foreign                  ( Ptr, nullPtr, plusPtr, maybeWith, FunPtr
+import Foreign                  ( Ptr, nullPtr, plusPtr, maybeWith
                                 , ForeignPtr, newForeignPtr )
-import Foreign.C.Types (CUIntPtr(..))
 
 ##include "windows_cconv.h"
 
@@ -54,14 +81,6 @@ mapFile path = do
                     ptr <- mapViewOfFile fm fILE_MAP_READ 0 0
                     newForeignPtr c_UnmapViewOfFileFinaliser ptr
                 return (fp, fromIntegral $ bhfiSize fi)
-
--- | As mapFile, but returns ByteString
-mapFileBs :: FilePath -> IO ByteString
-mapFileBs p = do
-    (fp,i) <- mapFile p
-    return $ fromForeignPtr fp 0 i
-
-data MappedObject = MappedObject HANDLE HANDLE FileMapAccess
 
 -- | Opens an existing file and creates mapping object to it.
 withMappedFile
@@ -108,24 +127,6 @@ withMappedArea (MappedObject _ mh access) pos size act = do
         (act . flip plusPtr (fromIntegral offset))
 
 ---------------------------------------------------------------------------
--- Enums
----------------------------------------------------------------------------
-type ProtectSectionFlags = DWORD
-#{enum ProtectSectionFlags,
-    , sEC_COMMIT    = SEC_COMMIT
-    , sEC_IMAGE     = SEC_IMAGE
-    , sEC_NOCACHE   = SEC_NOCACHE
-    , sEC_RESERVE   = SEC_RESERVE
-    }
-type FileMapAccess = DWORD
-#{enum FileMapAccess,
-    , fILE_MAP_ALL_ACCESS   = FILE_MAP_ALL_ACCESS
-    , fILE_MAP_COPY         = FILE_MAP_COPY
-    , fILE_MAP_READ         = FILE_MAP_READ
-    , fILE_MAP_WRITE        = FILE_MAP_WRITE
-    }
-
----------------------------------------------------------------------------
 -- API in Haskell
 ---------------------------------------------------------------------------
 createFileMapping :: Maybe HANDLE -> ProtectFlags -> DDWORD -> Maybe String -> IO HANDLE
@@ -143,7 +144,7 @@ openFileMapping access inherit name =
             c_OpenFileMapping access inherit c_name
 
 mapViewOfFileEx :: HANDLE -> FileMapAccess -> DDWORD -> SIZE_T -> Ptr a -> IO (Ptr b)
-mapViewOfFileEx h access offset size base = 
+mapViewOfFileEx h access offset size base =
     failIfNull "mapViewOfFile(Ex): c_MapViewOfFileEx" $
         c_MapViewOfFileEx h access ohi olow size base
     where
@@ -155,21 +156,3 @@ mapViewOfFile h a o s = mapViewOfFileEx h a o s nullPtr
 unmapViewOfFile :: Ptr a -> IO ()
 unmapViewOfFile v = c_UnmapViewOfFile v >> return ()
 
----------------------------------------------------------------------------
--- Imports
----------------------------------------------------------------------------
-foreign import WINDOWS_CCONV "windows.h OpenFileMappingW"
-    c_OpenFileMapping :: DWORD -> BOOL -> LPCTSTR -> IO HANDLE
-
-foreign import WINDOWS_CCONV "windows.h CreateFileMappingW"
-    c_CreateFileMapping :: HANDLE -> Ptr () -> DWORD -> DWORD -> DWORD -> LPCTSTR -> IO HANDLE 
-
-foreign import WINDOWS_CCONV "windows.h MapViewOfFileEx"
-    c_MapViewOfFileEx :: HANDLE -> DWORD -> DWORD -> DWORD -> SIZE_T -> Ptr a -> IO (Ptr b)
-
-foreign import WINDOWS_CCONV "windows.h UnmapViewOfFile"
-    c_UnmapViewOfFile :: Ptr a -> IO BOOL
-
-{-# CFILES cbits/HsWin32.c #-}
-foreign import ccall "HsWin32.h &UnmapViewOfFileFinaliser"
-    c_UnmapViewOfFileFinaliser :: FunPtr (Ptr a -> IO ())

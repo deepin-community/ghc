@@ -1,6 +1,6 @@
 #if __GLASGOW_HASKELL__ >= 709
 {-# LANGUAGE Safe #-}
-#elif __GLASGOW_HASKELL__ >= 701
+#else
 {-# LANGUAGE Trustworthy #-}
 #endif
 -----------------------------------------------------------------------------
@@ -268,7 +268,7 @@ type TimerId   = UINT
 
 type TIMERPROC = FunPtr (HWND -> UINT -> TimerId -> DWORD -> IO ())
 
--- ToDo: support the other two forms of timer initialisation
+-- TODO: support the other two forms of timer initialisation
 
 -- Cause WM_TIMER events to be sent to window callback
 

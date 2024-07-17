@@ -8,7 +8,7 @@
    Stability   :  Provisional
    Portability :  Non-portable (Win32 API)
 
-   Enocode/Decode mutibyte charactor using Win32 API.
+   Enocode/Decode mutibyte character using Win32 API.
 -}
 
 module System.Win32.Encoding
@@ -40,7 +40,7 @@ getCurrentCodePage = do
         then return conCP
         else getACP
 
--- | The "System.IO" output functions (e.g. `putStr`) don't
+-- | The "System.IO" output functions (e.g., `putStr`) don't
 -- automatically convert to multibyte string on Windows, so this
 -- function is provided to make the conversion from a Unicode string
 -- in the given code page to a proper multibyte string.  To get the

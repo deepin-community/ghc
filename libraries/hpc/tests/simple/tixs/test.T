@@ -1,4 +1,4 @@
-setTestOpts([omit_ways(['ghci']), when(fast(), skip)])
+setTestOpts([omit_ways(['ghci']), when(fast(), skip), js_skip])
 
 test('hpc_help', normal, run_command, ["{hpc} help"])
 test('hpc_help_help', normal, run_command, ["{hpc} help help"])
@@ -35,7 +35,6 @@ test('hpc_show_error_002', exit_code(1), run_command,
      ["{hpc} show hpc001.hs"]) # bad .tix file
 
 test('hpc_help_version', normal, run_command, ["{hpc} help version"])
-test('hpc_version', normal, run_command, ["{hpc} version"])
 
 test('hpc_help_draft', normal, run_command, ["{hpc} help draft"])
 test('hpc_draft', extra_files(['.hpc/', 'hpc001.hs', 'hpc_sample.tix']), run_command, ["{hpc} draft hpc_sample.tix"])

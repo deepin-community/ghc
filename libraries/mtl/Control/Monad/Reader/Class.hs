@@ -1,9 +1,13 @@
-{-# LANGUAGE CPP #-}
+{-# LANGUAGE Safe #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE UndecidableInstances #-}
 -- Search for UndecidableInstances to see why this is needed
+{-# LANGUAGE UndecidableInstances #-}
+-- Needed because the CPSed versions of Writer and State are secretly State
+-- wrappers, which don't force such constraints, even though they should legally
+-- be there.
+{-# OPTIONS_GHC -Wno-redundant-constraints #-}
 {- |
 Module      :  Control.Monad.Reader.Class
 Copyright   :  (c) Andy Gill 2001,
@@ -46,24 +50,25 @@ module Control.Monad.Reader.Class (
     asks,
     ) where
 
-import Control.Monad.Trans.Cont as Cont
-import Control.Monad.Trans.Except
-import Control.Monad.Trans.Error
-import Control.Monad.Trans.Identity
-import Control.Monad.Trans.List
-import Control.Monad.Trans.Maybe
+import qualified Control.Monad.Trans.Cont as Cont
+import Control.Monad.Trans.Cont (ContT)
+import Control.Monad.Trans.Except (ExceptT, mapExceptT)
+import Control.Monad.Trans.Identity (IdentityT, mapIdentityT)
+import Control.Monad.Trans.Maybe (MaybeT, mapMaybeT)
 import Control.Monad.Trans.Reader (ReaderT)
-import qualified Control.Monad.Trans.Reader as ReaderT (ask, local, reader)
-import qualified Control.Monad.Trans.RWS.Lazy as LazyRWS (RWST, ask, local, reader)
-import qualified Control.Monad.Trans.RWS.Strict as StrictRWS (RWST, ask, local, reader)
-import Control.Monad.Trans.State.Lazy as Lazy
-import Control.Monad.Trans.State.Strict as Strict
-import Control.Monad.Trans.Writer.Lazy as Lazy
-import Control.Monad.Trans.Writer.Strict as Strict
-
+import qualified Control.Monad.Trans.Reader as ReaderT
+import qualified Control.Monad.Trans.RWS.Lazy as LazyRWS
+import qualified Control.Monad.Trans.RWS.Strict as StrictRWS
+import qualified Control.Monad.Trans.State.Lazy as Lazy
+import qualified Control.Monad.Trans.State.Strict as Strict
+import qualified Control.Monad.Trans.Writer.Lazy as Lazy
+import qualified Control.Monad.Trans.Writer.Strict as Strict
+import Control.Monad.Trans.Accum (AccumT)
+import qualified Control.Monad.Trans.Accum as Accum
+import Control.Monad.Trans.Select (SelectT (SelectT), runSelectT)
+import qualified Control.Monad.Trans.RWS.CPS as CPSRWS
+import qualified Control.Monad.Trans.Writer.CPS as CPS
 import Control.Monad.Trans.Class (lift)
-import Control.Monad
-import Data.Monoid
 
 -- ----------------------------------------------------------------------------
 -- class MonadReader
@@ -73,9 +78,7 @@ import Data.Monoid
 -- Note, the partially applied function type @(->) r@ is a simple reader monad.
 -- See the @instance@ declaration below.
 class Monad m => MonadReader r m | m -> r where
-#if __GLASGOW_HASKELL__ >= 707
     {-# MINIMAL (ask | reader), local #-}
-#endif
     -- | Retrieves the monad environment.
     ask   :: m r
     ask = reader id
@@ -111,6 +114,12 @@ instance Monad m => MonadReader r (ReaderT r m) where
     local = ReaderT.local
     reader = ReaderT.reader
 
+-- | @since 2.3
+instance (Monad m, Monoid w) => MonadReader r (CPSRWS.RWST r w s m) where
+    ask = CPSRWS.ask
+    local = CPSRWS.local
+    reader = CPSRWS.reader
+
 instance (Monad m, Monoid w) => MonadReader r (LazyRWS.RWST r w s m) where
     ask = LazyRWS.ask
     local = LazyRWS.local
@@ -132,11 +141,6 @@ instance MonadReader r' m => MonadReader r' (ContT r m) where
     local = Cont.liftLocal ask local
     reader = lift . reader
 
-instance (Error e, MonadReader r m) => MonadReader r (ErrorT e m) where
-    ask   = lift ask
-    local = mapErrorT . local
-    reader = lift . reader
-
 {- | @since 2.2 -}
 instance MonadReader r m => MonadReader r (ExceptT e m) where
     ask   = lift ask
@@ -146,11 +150,6 @@ instance MonadReader r m => MonadReader r (ExceptT e m) where
 instance MonadReader r m => MonadReader r (IdentityT m) where
     ask   = lift ask
     local = mapIdentityT . local
-    reader = lift . reader
-
-instance MonadReader r m => MonadReader r (ListT m) where
-    ask   = lift ask
-    local = mapListT . local
     reader = lift . reader
 
 instance MonadReader r m => MonadReader r (MaybeT m) where
@@ -168,6 +167,12 @@ instance MonadReader r m => MonadReader r (Strict.StateT s m) where
     local = Strict.mapStateT . local
     reader = lift . reader
 
+-- | @since 2.3
+instance (Monoid w, MonadReader r m) => MonadReader r (CPS.WriterT w m) where
+    ask   = lift ask
+    local = CPS.mapWriterT . local
+    reader = lift . reader
+
 instance (Monoid w, MonadReader r m) => MonadReader r (Lazy.WriterT w m) where
     ask   = lift ask
     local = Lazy.mapWriterT . local
@@ -176,4 +181,24 @@ instance (Monoid w, MonadReader r m) => MonadReader r (Lazy.WriterT w m) where
 instance (Monoid w, MonadReader r m) => MonadReader r (Strict.WriterT w m) where
     ask   = lift ask
     local = Strict.mapWriterT . local
+    reader = lift . reader
+
+-- | @since 2.3
+instance
+  ( Monoid w
+  , MonadReader r m
+  ) => MonadReader r (AccumT w m) where
+    ask = lift ask
+    local = Accum.mapAccumT . local
+    reader = lift . reader
+
+-- | @since 2.3
+instance
+  ( MonadReader r' m
+  ) => MonadReader r' (SelectT r m) where
+    ask = lift ask
+    -- there is no Select.liftLocal
+    local f m = SelectT $ \c -> do
+      r <- ask
+      local f (runSelectT m (local (const r) . c))
     reader = lift . reader

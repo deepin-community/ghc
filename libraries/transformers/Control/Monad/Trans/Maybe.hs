@@ -1,8 +1,9 @@
 {-# LANGUAGE CPP #-}
 #if __GLASGOW_HASKELL__ >= 702
 {-# LANGUAGE Safe #-}
+{-# LANGUAGE DeriveGeneric #-}
 #endif
-#if __GLASGOW_HASKELL__ >= 710
+#if __GLASGOW_HASKELL__ >= 710 && __GLASGOW_HASKELL__ < 802
 {-# LANGUAGE AutoDeriveTypeable #-}
 #endif
 -----------------------------------------------------------------------------
@@ -31,6 +32,7 @@ module Control.Monad.Trans.Maybe (
     MaybeT(..),
     mapMaybeT,
     -- * Monad transformations
+    hoistMaybe,
     maybeToExceptT,
     exceptToMaybeT,
     -- * Lifting other operations
@@ -58,9 +60,14 @@ import Control.Monad.Fix (MonadFix(mfix))
 #if MIN_VERSION_base(4,4,0)
 import Control.Monad.Zip (MonadZip(mzipWith))
 #endif
-import Data.Foldable (Foldable(foldMap))
 import Data.Maybe (fromMaybe)
+#if !(MIN_VERSION_base(4,8,0))
+import Data.Foldable (Foldable(foldMap))
 import Data.Traversable (Traversable(traverse))
+#endif
+#if __GLASGOW_HASKELL__ >= 704
+import GHC.Generics
+#endif
 
 -- | The parameterizable maybe monad, obtained by composing an arbitrary
 -- monad with the 'Maybe' monad.
@@ -71,6 +78,11 @@ import Data.Traversable (Traversable(traverse))
 -- value, while @>>=@ sequences two subcomputations, exiting if either
 -- computation does.
 newtype MaybeT m a = MaybeT { runMaybeT :: m (Maybe a) }
+#if __GLASGOW_HASKELL__ >= 710
+    deriving (Generic, Generic1)
+#elif __GLASGOW_HASKELL__ >= 704
+    deriving (Generic)
+#endif
 
 instance (Eq1 m) => Eq1 (MaybeT m) where
     liftEq eq (MaybeT x) (MaybeT y) = liftEq (liftEq eq) x y
@@ -105,6 +117,10 @@ instance (Show1 m, Show a) => Show (MaybeT m a) where showsPrec = showsPrec1
 mapMaybeT :: (m (Maybe a) -> n (Maybe b)) -> MaybeT m a -> MaybeT n b
 mapMaybeT f = MaybeT . f . runMaybeT
 {-# INLINE mapMaybeT #-}
+
+-- | Convert a 'Maybe' computation to 'MaybeT'.
+hoistMaybe :: (Applicative m) => Maybe b -> MaybeT m b
+hoistMaybe = MaybeT . pure
 
 -- | Convert a 'MaybeT' computation to 'ExceptT', with a default
 -- exception value.

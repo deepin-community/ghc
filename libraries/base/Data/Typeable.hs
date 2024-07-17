@@ -1,10 +1,10 @@
-{-# LANGUAGE Trustworthy #-}
+{-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE ConstraintKinds #-}
-{-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE Trustworthy #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 
 -----------------------------------------------------------------------------
@@ -14,7 +14,7 @@
 -- License     :  BSD-style (see the file libraries/base/LICENSE)
 --
 -- Maintainer  :  libraries@haskell.org
--- Stability   :  experimental
+-- Stability   :  stable
 -- Portability :  portable
 --
 -- The 'Typeable' class reifies types to some extent by associating type
@@ -33,10 +33,14 @@
 -- index, providing an interface very similar to the "Typeable" notion seen in
 -- previous releases. For the type-indexed interface, see "Type.Reflection".
 --
+-- Since GHC 7.10, all types automatically have 'Typeable' instances derived.
+-- This is in contrast to previous releases where 'Typeable' had to be
+-- explicitly derived using the @DeriveDataTypeable@ language extension.
+--
 -- Since GHC 7.8, 'Typeable' is poly-kinded. The changes required for this might
 -- break some old programs involving 'Typeable'. More details on this, including
 -- how to fix your code, can be found on the
--- <https://ghc.haskell.org/trac/ghc/wiki/GhcKinds/PolyTypeable PolyTypeable wiki page>
+-- <https://gitlab.haskell.org/ghc/ghc/wikis/ghc-kinds/poly-typeable PolyTypeable wiki page>
 --
 -----------------------------------------------------------------------------
 
@@ -53,6 +57,7 @@ module Data.Typeable
       -- * Type-safe cast
     , cast
     , eqT
+    , heqT
     , gcast                -- a generalisation of cast
 
       -- * Generalized casts for higher-order kinds
@@ -86,6 +91,8 @@ module Data.Typeable
 
       -- * For backwards compatibility
     , typeOf1, typeOf2, typeOf3, typeOf4, typeOf5, typeOf6, typeOf7
+      -- Jank
+    , I.trLiftedRep
     ) where
 
 import qualified Data.Typeable.Internal as I
@@ -130,8 +137,14 @@ cast x
 -- @since 4.7.0.0
 eqT :: forall a b. (Typeable a, Typeable b) => Maybe (a :~: b)
 eqT
-  | Just HRefl <- ta `I.eqTypeRep` tb = Just Refl
-  | otherwise                         = Nothing
+  | Just HRefl <- heqT @a @b = Just Refl
+  | otherwise                = Nothing
+
+-- | Extract a witness of heterogeneous equality of two types
+--
+-- @since 4.18.0.0
+heqT :: forall a b. (Typeable a, Typeable b) => Maybe (a :~~: b)
+heqT = ta `I.eqTypeRep` tb
   where
     ta = I.typeRep :: I.TypeRep a
     tb = I.typeRep :: I.TypeRep b

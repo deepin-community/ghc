@@ -1,7 +1,6 @@
+{-# LANGUAGE CApiFFI #-}
 {-# LANGUAGE Trustworthy #-}
-#if __GLASGOW_HASKELL__ >= 709
-{-# OPTIONS_GHC -fno-warn-trustworthy-safe #-}
-#endif
+{-# OPTIONS_GHC -Wno-trustworthy-safe #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -43,11 +42,16 @@ import Foreign.Ptr      ( Ptr, FunPtr, nullPtr )
 import Foreign.C.Types
 import Foreign.C.String ( CString )
 
+#if !defined(HAVE_DLFCN_H)
+import Control.Exception ( throw )
+import System.IO.Error ( ioeSetLocation )
+import GHC.IO.Exception ( unsupportedOperation )
+#endif
 
 -- |On some hosts (e.g. SuSe and Ubuntu Linux) @RTLD_NEXT@ (and
 -- @RTLD_DEFAULT@) are not visible without setting the macro
 -- @_GNU_SOURCE@. Since we don\'t want to define this macro, you can use
--- the function 'haveRtldNext' to check wether the flag `Next` is
+-- the function 'haveRtldNext' to check whether the flag `Next` is
 -- available. Ideally, this will be optimized by the compiler so that it
 -- should be as efficient as an @#ifdef@.
 --
@@ -81,20 +85,36 @@ data RTLDFlags
   | RTLD_LOCAL
     deriving (Show, Read)
 
-foreign import ccall unsafe "dlopen" c_dlopen :: CString -> CInt -> IO (Ptr ())
+#if defined(HAVE_DLFCN_H)
+foreign import capi safe "dlfcn.h dlopen" c_dlopen :: CString -> CInt -> IO (Ptr ())
+foreign import capi unsafe "dlfcn.h dlsym"  c_dlsym  :: Ptr () -> CString -> IO (FunPtr a)
+foreign import capi unsafe "dlfcn.h dlerror" c_dlerror :: IO CString
+foreign import capi safe "dlfcn.h dlclose" c_dlclose :: (Ptr ()) -> IO CInt
+#else
+foreign import ccall safe "dlopen" c_dlopen :: CString -> CInt -> IO (Ptr ())
 foreign import ccall unsafe "dlsym"  c_dlsym  :: Ptr () -> CString -> IO (FunPtr a)
 foreign import ccall unsafe "dlerror" c_dlerror :: IO CString
-foreign import ccall unsafe "dlclose" c_dlclose :: (Ptr ()) -> IO CInt
+foreign import ccall safe "dlclose" c_dlclose :: (Ptr ()) -> IO CInt
+#endif // HAVE_DLFCN_H
 
 packRTLDFlags :: [RTLDFlags] -> CInt
 packRTLDFlags flags = foldl (\ s f -> (packRTLDFlag f) .|. s) 0 flags
 
 packRTLDFlag :: RTLDFlags -> CInt
+#if defined(HAVE_DLFCN_H)
+
 packRTLDFlag RTLD_LAZY = #const RTLD_LAZY
 packRTLDFlag RTLD_NOW = #const RTLD_NOW
 packRTLDFlag RTLD_GLOBAL = #const RTLD_GLOBAL
 packRTLDFlag RTLD_LOCAL = #const RTLD_LOCAL
 
+#else
+
+{-# WARNING packRTLDFlag
+    "operation will throw 'IOError' \"unsupported operation\" (CPP guard: @#if HAVE_DLFCN_H@)" #-}
+packRTLDFlag _ = throw (ioeSetLocation unsupportedOperation "packRTLDFlag")
+
+#endif // HAVE_DLFCN_H
 
 -- |Flags for 'System.Posix.DynamicLinker.dlsym'. Notice that 'Next'
 -- might not be available on your particular platform! Use

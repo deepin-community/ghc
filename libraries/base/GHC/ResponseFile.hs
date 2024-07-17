@@ -77,7 +77,7 @@ getArgsWithResponseFiles = getArgs >>= expandResponse
 -- are between the original, un-concatenated list of strings.  These
 -- added whitespace characters are removed from the output.
 --
--- > unescapeArgs "hello\\ \\\"world\\\"\n" == escapeArgs "hello \"world\""
+-- > unescapeArgs "hello\\ \\\"world\\\"\n" == ["hello \"world\""]
 unescapeArgs :: String -> [String]
 unescapeArgs = filter (not . null) . unescape
 
@@ -92,11 +92,11 @@ unescapeArgs = filter (not . null) . unescape
 --
 -- While 'unescapeArgs' allows using quoting (i.e., convenient
 -- escaping of many characters) by having matching sets of single- or
--- double-quotes,'escapeArgs' does not use the quoting mechasnism,
+-- double-quotes,'escapeArgs' does not use the quoting mechanism,
 -- and thus will always escape any whitespace, quotes, and
 -- backslashes.
 --
--- > unescapeArgs "hello\\ \\\"world\\\"\\n" == escapeArgs "hello \"world\""
+-- > escapeArgs ["hello \"world\""] == "hello\\ \\\"world\\\"\n"
 escapeArgs :: [String] -> String
 escapeArgs = unlines . map escapeArg
 

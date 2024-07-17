@@ -1,3 +1,23 @@
+## Changes in 2.29.2
+ * Revert "Fix #783 Don't show button if --quickjump not present",
+   which broke quickjump functionality.
+
+## Changes in 2.29.1
+ * Fix build on GHC 9.2
+
+## Changes in 2.29.0
+ * Fixes for memory leaks and performance improvements
+
+## Changes in 2.28.0
+ * Support qualified and unqualified names in `--ignore-link-symbol`
+
+## Changes in 2.24.0
+
+ * Reify oversaturated data family instances correctly (#1103)
+
+ * Removed the majority of Haddock's possible `panic` routes through
+   the TTG refactor to make extension variants empty
+
 ## Changes in 2.23.0
 
  * "Linuwial" is the new default theme (#721, #782, #949)

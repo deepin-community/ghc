@@ -2,6 +2,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE Safe #-}
+{-# LANGUAGE StandaloneDeriving #-}
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Data.Functor.Product
@@ -9,7 +10,7 @@
 -- License     :  BSD-style (see the file LICENSE)
 --
 -- Maintainer  :  libraries@haskell.org
--- Stability   :  experimental
+-- Stability   :  stable
 -- Portability :  portable
 --
 -- Products, lifted to functors.
@@ -28,7 +29,7 @@ import Control.Monad.Zip (MonadZip(mzipWith))
 import Data.Data (Data)
 import Data.Functor.Classes
 import GHC.Generics (Generic, Generic1)
-import Text.Read (Read(..), readListDefault, readListPrecDefault)
+import Text.Read ()
 
 -- | Lifted product of functors.
 data Product f g a = Pair (f a) (g a)
@@ -36,6 +37,15 @@ data Product f g a = Pair (f a) (g a)
            , Generic  -- ^ @since 4.9.0.0
            , Generic1 -- ^ @since 4.9.0.0
            )
+
+-- | @since 4.18.0.0
+deriving instance (Eq (f a), Eq (g a)) => Eq (Product f g a)
+-- | @since 4.18.0.0
+deriving instance (Ord (f a), Ord (g a)) => Ord (Product f g a)
+-- | @since 4.18.0.0
+deriving instance (Read (f a), Read (g a)) => Read (Product f g a)
+-- | @since 4.18.0.0
+deriving instance (Show (f a), Show (g a)) => Show (Product f g a)
 
 -- | @since 4.9.0.0
 instance (Eq1 f, Eq1 g) => Eq1 (Product f g) where
@@ -60,27 +70,9 @@ instance (Show1 f, Show1 g) => Show1 (Product f g) where
         showsBinaryWith (liftShowsPrec sp sl) (liftShowsPrec sp sl) "Pair" d x y
 
 -- | @since 4.9.0.0
-instance (Eq1 f, Eq1 g, Eq a) => Eq (Product f g a)
-    where (==) = eq1
-
--- | @since 4.9.0.0
-instance (Ord1 f, Ord1 g, Ord a) => Ord (Product f g a) where
-    compare = compare1
-
--- | @since 4.9.0.0
-instance (Read1 f, Read1 g, Read a) => Read (Product f g a) where
-    readPrec = readPrec1
-
-    readListPrec = readListPrecDefault
-    readList     = readListDefault
-
--- | @since 4.9.0.0
-instance (Show1 f, Show1 g, Show a) => Show (Product f g a) where
-    showsPrec = showsPrec1
-
--- | @since 4.9.0.0
 instance (Functor f, Functor g) => Functor (Product f g) where
     fmap f (Pair x y) = Pair (fmap f x) (fmap f y)
+    a <$ (Pair x y) = Pair (a <$ x) (a <$ y)
 
 -- | @since 4.9.0.0
 instance (Foldable f, Foldable g) => Foldable (Product f g) where
@@ -123,3 +115,11 @@ instance (MonadFix f, MonadFix g) => MonadFix (Product f g) where
 -- | @since 4.9.0.0
 instance (MonadZip f, MonadZip g) => MonadZip (Product f g) where
     mzipWith f (Pair x1 y1) (Pair x2 y2) = Pair (mzipWith f x1 x2) (mzipWith f y1 y2)
+
+-- | @since 4.16.0.0
+instance (Semigroup (f a), Semigroup (g a)) => Semigroup (Product f g a) where
+    Pair x1 y1 <> Pair x2 y2 = Pair (x1 <> x2) (y1 <> y2)
+
+-- | @since 4.16.0.0
+instance (Monoid (f a), Monoid (g a)) => Monoid (Product f g a) where
+    mempty = Pair mempty mempty

@@ -2,17 +2,17 @@ module UnitTests.Distribution.Client.Tar (
   tests
   ) where
 
-import Distribution.Client.Tar ( filterEntries
-                               , filterEntriesM
-                               )
-import Codec.Archive.Tar       ( Entries(..)
-                               , foldEntries
-                               )
-import Codec.Archive.Tar.Entry ( EntryContent(..)
-                               , simpleEntry
-                               , Entry(..)
-                               , toTarPath
-                               )
+import Codec.Archive.Tar
+  ( foldEntries
+  )
+import Codec.Archive.Tar.Entry
+  ( simpleEntry
+  , toTarPath
+  )
+import Distribution.Client.Tar
+  ( filterEntries
+  , filterEntriesM
+  )
 
 import Test.Tasty
 import Test.Tasty.HUnit
@@ -20,6 +20,8 @@ import Test.Tasty.HUnit
 import qualified Data.ByteString.Lazy as BS
 import qualified Data.ByteString.Lazy.Char8 as BS.Char8
 import Control.Monad.Writer.Lazy (runWriterT, tell)
+
+import Distribution.Client.Compat.Tar
 
 tests :: [TestTree]
 tests = [ testCase "filterEntries" filterTest
@@ -30,8 +32,9 @@ filterTest :: Assertion
 filterTest = do
   let e1 = getFileEntry "file1" "x"
       e2 = getFileEntry "file2" "y"
-      p = (\e -> let (NormalFile dta _) = entryContent e
-                     str = BS.Char8.unpack dta
+      p = (\e -> let str = BS.Char8.unpack $ case entryContent e of
+                       NormalFile dta _ -> dta
+                       _                -> error "Invalid entryContent"
                  in str /= "y")
   assertEqual "Unexpected result for filter" "xz" $
     entriesToString $ filterEntries p $ Next e1 $ Next e2 Done
@@ -44,8 +47,9 @@ filterMTest :: Assertion
 filterMTest = do
   let e1 = getFileEntry "file1" "x"
       e2 = getFileEntry "file2" "y"
-      p = (\e -> let (NormalFile dta _) = entryContent e
-                     str = BS.Char8.unpack dta
+      p = (\e -> let str = BS.Char8.unpack $ case entryContent e of
+                       NormalFile dta _ -> dta
+                       _                -> error "Invalid entryContent"
                  in tell "t" >> return (str /= "y"))
 
   (r, w) <- runWriterT $ filterEntriesM p $ Next e1 $ Next e2 Done
@@ -70,6 +74,7 @@ getFileEntry pth dta =
 
 entriesToString :: Entries String -> String
 entriesToString =
-  foldEntries (\e acc -> let (NormalFile dta _) = entryContent e
-                             str = BS.Char8.unpack dta
+  foldEntries (\e acc -> let str = BS.Char8.unpack $ case entryContent e of
+                               NormalFile dta _ -> dta
+                               _                -> error "Invalid entryContent"
                           in str ++ acc) "z" id

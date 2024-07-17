@@ -1,6 +1,76 @@
 Changelog for the [`directory`][1] package
 ==========================================
 
+## 1.3.8.4 (Apr 2024)
+
+  * Relax `time` version bounds to support 1.14.
+    ([#171](https://github.com/haskell/directory/issues/171))
+  * Relax `base` version bounds to support 4.20.
+    ([#173](https://github.com/haskell/directory/issues/173))
+  * Relax `filepath` version bounds to support 1.4.300 when `os-string` is
+    unavailable.
+    ([#175](https://github.com/haskell/directory/issues/175))
+
+## 1.3.8.3 (Jan 2024)
+
+  * Relax `Win32` version bounds to support 2.14.0.0.
+    ([#166](https://github.com/haskell/directory/issues/166))
+  * Fix regression in `canonicalizePath` on Windows UNC paths.
+    ([#170](https://github.com/haskell/directory/issues/170))
+
+## 1.3.8.2 (Dec 2023)
+
+  * Relax `base` version bounds to support 4.19.
+    ([#157](https://github.com/haskell/directory/pull/157))
+  * Support filepath >= 1.5.0.0 and os-string.
+    ([#164](https://github.com/haskell/directory/issues/164))
+
+## 1.3.8.1 (Feb 2023)
+
+  * Use CApiFFI for utimensat.
+    ([#145](https://github.com/haskell/directory/pull/145))
+  * Relax `base` version bounds to support 4.18.
+    ([#151](https://github.com/haskell/directory/pull/151))
+
+## 1.3.8.0 (Sep 2022)
+
+  * Drop support for `base` older than 4.11.0.
+  * Drop support for `filepath` older than 1.4.100.
+  * Drop support for `time` older than 1.8.0.
+  * Drop support for `unix` older than 2.8.0.
+  * Drop support for `Win32` older than 2.13.3.
+  * Modules in `directory` are no longer considered
+    [Safe](https://downloads.haskell.org/ghc/latest/docs/users_guide/exts/safe_haskell.html)
+    because the `System.OsPath` dependency is no longer Safe.
+  * A new module, `System.Directory.OsPath`, has been introduced to support
+    AFPP (`OsPath` and `OsString`) with an analogous API. The old module,
+    `System.Directory`, shall be in maintenance mode as new features will no
+    longer be accepted there.
+    ([#136](https://github.com/haskell/directory/pull/136))
+  * `removePathForcibly` no longer changes permissions of files on non-Windows
+    systems.  ([#135](https://github.com/haskell/directory/issues/135))
+
+## 1.3.7.1 (Jul 2022)
+
+  * Relax `time` version bounds to support 1.12.
+  * Relax `Win32` version bounds to support 2.13.
+  * Relax `base` version bounds to support 4.17.
+
+## 1.3.7.0 (Sep 2021)
+
+  * `getXdgDirectory` now supports `XdgState` (`XDG_STATE_HOME`).
+    ([#121](https://github.com/haskell/directory/pull/121))
+
+## 1.3.6.2 (May 2021)
+
+  * Relax `Win32` version bounds to support 2.11.
+  * Relax `time` version bounds to support 1.11.
+  * Relax `base` version bounds to support 4.16.
+
+## 1.3.6.1 (March 2020)
+
+  * Relax `time` version bounds to support 1.10.
+
 ## 1.3.6.0 (January 2020)
 
   * On non-Windows platforms, `getHomeDirectory` will fall back to

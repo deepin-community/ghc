@@ -6,7 +6,7 @@
  *
  * This file is written in a subset of C--, extended with various
  * features specific to GHC.  It is compiled by GHC directly.  For the
- * syntax of .cmm files, see the parser in ghc/compiler/cmm/CmmParse.y.
+ * syntax of .cmm files, see the parser in ghc/compiler/GHC/Cmm/Parser.y.
  *
  * ---------------------------------------------------------------------------*/
 
@@ -14,6 +14,34 @@
 #include "RaiseAsync.h"
 
 import CLOSURE ghczmprim_GHCziTypes_True_closure;
+import CLOSURE base_GHCziExceptionziType_divZZeroException_closure;
+import CLOSURE base_GHCziExceptionziType_underflowException_closure;
+import CLOSURE base_GHCziExceptionziType_overflowException_closure;
+#if !defined(UnregisterisedCompiler)
+import CLOSURE CATCHF_PUSHED_ctr;
+import CLOSURE RtsFlags;
+import CLOSURE SLOW_CALL_fast_pv_ctr;
+import CLOSURE SLOW_CALL_fast_v_ctr;
+import CLOSURE STK_CHK_ctr;
+import CLOSURE UNKNOWN_CALL_ctr;
+import CLOSURE g0;
+import CLOSURE large_alloc_lim;
+import CLOSURE no_break_on_exception;
+import CLOSURE rts_breakpoint_io_action;
+import CLOSURE rts_stop_on_exception;
+import CLOSURE stg_END_TSO_QUEUE_closure;
+import CLOSURE stg_NO_TREC_closure;
+import CLOSURE stg_ap_n_info;
+import CLOSURE stg_ap_ppv_info;
+import CLOSURE stg_ap_v_info;
+import CLOSURE stg_catch_frame_info;
+import CLOSURE stg_enter_info;
+import CLOSURE stg_maskAsyncExceptionszh_ret_info;
+import CLOSURE stg_maskUninterruptiblezh_ret_info;
+import CLOSURE stg_raise_ret_info;
+import CLOSURE stg_ret_p_info;
+import CLOSURE stg_unmaskAsyncExceptionszh_ret_info;
+#endif
 
 /* -----------------------------------------------------------------------------
    Exception Primitives
@@ -53,7 +81,6 @@ import CLOSURE ghczmprim_GHCziTypes_True_closure;
    not restored.
 
    -------------------------------------------------------------------------- */
-
 
 INFO_TABLE_RET(stg_unmaskAsyncExceptionszh_ret, RET_SMALL, W_ info_ptr)
     /* explicit stack */
@@ -148,9 +175,11 @@ stg_maskAsyncExceptionszh /* explicit stack */
             Sp(0) = stg_unmaskAsyncExceptionszh_ret_info;
         }
     } else {
+        Sp_adj(-1);
         if ((TO_W_(StgTSO_flags(CurrentTSO)) & TSO_INTERRUPTIBLE) == 0) {
-            Sp_adj(-1);
             Sp(0) = stg_maskUninterruptiblezh_ret_info;
+        } else {
+            Sp(0) = stg_maskAsyncExceptionszh_ret_info;
         }
     }
 
@@ -176,10 +205,12 @@ stg_maskUninterruptiblezh /* explicit stack */
             Sp(0) = stg_unmaskAsyncExceptionszh_ret_info;
         }
     } else {
-        if ((TO_W_(StgTSO_flags(CurrentTSO)) & TSO_INTERRUPTIBLE) != 0) {
-            Sp_adj(-1);
-            Sp(0) = stg_maskAsyncExceptionszh_ret_info;
-        }
+      Sp_adj(-1);
+      if ((TO_W_(StgTSO_flags(CurrentTSO)) & TSO_INTERRUPTIBLE) == 0) {
+          Sp(0) = stg_maskUninterruptiblezh_ret_info;
+      } else {
+          Sp(0) = stg_maskAsyncExceptionszh_ret_info;
+      }
     }
 
     StgTSO_flags(CurrentTSO) = %lobits32(
@@ -200,12 +231,15 @@ stg_unmaskAsyncExceptionszh /* explicit stack */
     io = R1;
 
     STK_CHK_P_LL (WDS(4), stg_unmaskAsyncExceptionszh, io);
-    /* 4 words: one for the unmask frame, 3 for setting up the
+    /* 4 words: one for the mask frame, 3 for setting up the
      * stack to call maybePerformBlockedException() below.
      */
 
-    /* If exceptions are already unmasked, there's nothing to do */
-    if ((TO_W_(StgTSO_flags(CurrentTSO)) & TSO_BLOCKEX) != 0) {
+    /* If exceptions are already unmasked, no need to check for a masked exception */
+    if ((TO_W_(StgTSO_flags(CurrentTSO)) & TSO_BLOCKEX) == 0) {
+        Sp_adj(-1);
+        Sp(0) = stg_unmaskAsyncExceptionszh_ret_info;
+    } else {
 
         /* avoid growing the stack unnecessarily */
         if (Sp(0) == stg_unmaskAsyncExceptionszh_ret_info) {
@@ -318,6 +352,7 @@ stg_killThreadzh (P_ target, P_ exception)
             return ();
         } else {
             StgTSO_why_blocked(CurrentTSO) = BlockedOnMsgThrowTo;
+            updateRemembSetPushPtr(StgTSO_block_info(CurrentTSO));
             StgTSO_block_info(CurrentTSO) = msg;
             // we must block, and unlock the message before returning
             jump stg_block_throwto (target, exception);
@@ -358,46 +393,23 @@ stg_killMyself
  * kind of return to the activation record underneath us on the stack.
  */
 
-#define CATCH_FRAME_FIELDS(w_,p_,info_ptr,p1,p2,exceptions_blocked,handler)   \
+#define CATCH_FRAME_FIELDS(w_,p_,info_ptr,p1,p2,handler)   \
   w_ info_ptr,                                                          \
   PROF_HDR_FIELDS(w_,p1,p2)                                             \
-  w_ exceptions_blocked,                                                \
   p_ handler
 
 
 INFO_TABLE_RET(stg_catch_frame, CATCH_FRAME,
-               CATCH_FRAME_FIELDS(W_,P_,info_ptr, p1, p2,
-                                  exceptions_blocked,handler))
+               CATCH_FRAME_FIELDS(W_,P_,info_ptr, p1, p2,handler))
     return (P_ ret)
 {
     return (ret);
 }
 
-/* -----------------------------------------------------------------------------
- * The catch infotable
- *
- * This should be exactly the same as would be generated by this STG code
- *
- * catch = {x,h} \n {} -> catch#{x,h}
- *
- * It is used in deleteThread when reverting blackholes.
- * -------------------------------------------------------------------------- */
-
-INFO_TABLE(stg_catch,2,0,FUN,"catch","catch")
-    (P_ node)
-{
-    jump stg_catchzh(StgClosure_payload(node,0),StgClosure_payload(node,1));
-}
-
 stg_catchzh ( P_ io,      /* :: IO a */
               P_ handler  /* :: Exception -> IO a */ )
 {
-    W_ exceptions_blocked;
-
     STK_CHK_GEN();
-
-    exceptions_blocked =
-        TO_W_(StgTSO_flags(CurrentTSO)) & (TSO_BLOCKEX | TSO_INTERRUPTIBLE);
     TICK_CATCHF_PUSHED();
 
     /* Apply R1 to the realworld token */
@@ -405,8 +417,7 @@ stg_catchzh ( P_ io,      /* :: IO a */
     TICK_SLOW_CALL_fast_v();
 
     jump stg_ap_v_fast
-        (CATCH_FRAME_FIELDS(,,stg_catch_frame_info, CCCS, 0,
-                            exceptions_blocked, handler))
+        (CATCH_FRAME_FIELDS(,,stg_catch_frame_info, CCCS, 0, handler))
         (io);
 }
 
@@ -489,6 +500,8 @@ retry_pop_stack:
       ccall stmAbortTransaction(MyCapability() "ptr", trec "ptr");
       ccall stmFreeAbortedTRec(MyCapability() "ptr", trec "ptr");
 
+      // No need to push `trec` to update remembered set; it will be no longer
+      // reachable after we overwrite StgTSO.trec.
       StgTSO_trec(CurrentTSO) = NO_TREC;
       if (r != 0) {
         // Transaction was valid: continue searching for a catch frame
@@ -518,7 +531,7 @@ retry_pop_stack:
             // we don't want any further exceptions to be caught,
             // until GHCi is ready to handle them.  This prevents
             // deadlock if an exception is raised in InteractiveUI,
-            // for exmplae.  Perhaps the stop_on_exception flag should
+            // for example.  Perhaps the stop_on_exception flag should
             // be per-thread.
             CInt[rts_stop_on_exception] = 0;
             ("ptr" ioAction) = ccall deRefStablePtr (W_[rts_breakpoint_io_action] "ptr");
@@ -578,26 +591,28 @@ retry_pop_stack:
     frame = Sp;
     if (frame_type == CATCH_FRAME)
     {
+      // Note: if this branch is updated, there is a good chance that
+      // corresponding logic in `raiseAsync` must be updated to match!
+      // See Note [Apply the handler directly in raiseAsync] in RaiseAsync.c.
+
       Sp = Sp + SIZEOF_StgCatchFrame;
-      if ((StgCatchFrame_exceptions_blocked(frame) & TSO_BLOCKEX) == 0) {
+
+      W_ flags;
+      flags = TO_W_(StgTSO_flags(CurrentTSO));
+      if ((flags & TSO_BLOCKEX) == 0) {
           Sp_adj(-1);
           Sp(0) = stg_unmaskAsyncExceptionszh_ret_info;
       }
 
       /* Ensure that async exceptions are masked when running the handler.
-      */
-      StgTSO_flags(CurrentTSO) = %lobits32(
-          TO_W_(StgTSO_flags(CurrentTSO)) | TSO_BLOCKEX | TSO_INTERRUPTIBLE);
-
-      /* The interruptible state is inherited from the context of the
+       *
+       * The interruptible state is inherited from the context of the
        * catch frame, but note that TSO_INTERRUPTIBLE is only meaningful
        * if TSO_BLOCKEX is set.  (we got this wrong earlier, and #4988
        * was a symptom of the bug).
        */
-      if ((StgCatchFrame_exceptions_blocked(frame) &
-           (TSO_BLOCKEX | TSO_INTERRUPTIBLE)) == TSO_BLOCKEX) {
-          StgTSO_flags(CurrentTSO) = %lobits32(
-              TO_W_(StgTSO_flags(CurrentTSO)) & ~TSO_INTERRUPTIBLE);
+      if ((flags & (TSO_BLOCKEX | TSO_INTERRUPTIBLE)) != TSO_BLOCKEX) {
+        StgTSO_flags(CurrentTSO) = %lobits32(flags | TSO_BLOCKEX | TSO_INTERRUPTIBLE);
       }
     }
     else /* CATCH_STM_FRAME */
@@ -607,6 +622,8 @@ retry_pop_stack:
       outer  = StgTRecHeader_enclosing_trec(trec);
       ccall stmAbortTransaction(MyCapability() "ptr", trec "ptr");
       ccall stmFreeAbortedTRec(MyCapability() "ptr", trec "ptr");
+      // No need to push `trec` to update remembered set since we just freed
+      // it; it is no longer reachable.
       StgTSO_trec(CurrentTSO) = outer;
       Sp = Sp + SIZEOF_StgCatchSTMFrame;
     }
@@ -626,4 +643,35 @@ retry_pop_stack:
 stg_raiseIOzh (P_ exception)
 {
     jump stg_raisezh (exception);
+}
+
+
+stg_raiseDivZZerozh ()
+{
+    jump stg_raisezh(base_GHCziExceptionziType_divZZeroException_closure);
+}
+
+stg_raiseUnderflowzh ()
+{
+    jump stg_raisezh(base_GHCziExceptionziType_underflowException_closure);
+}
+
+stg_raiseOverflowzh ()
+{
+    jump stg_raisezh(base_GHCziExceptionziType_overflowException_closure);
+}
+
+/* The FFI doesn't support variadic C functions so we can't directly expose
+ * `barf` to Haskell code. Instead we define "stg_panic#" and it is exposed to
+ * Haskell programs in GHC.Prim.Panic.
+ */
+stg_paniczh (W_ str)
+{
+    ccall barf(str, NULL) never returns;
+}
+
+// See Note [Compiler error functions] in GHC.Prim.Panic
+stg_absentErrorzh (W_ str)
+{
+    ccall barf("Oops!  Entered absent arg %s", str) never returns;
 }

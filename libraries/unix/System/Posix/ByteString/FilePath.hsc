@@ -1,8 +1,5 @@
-#if __GLASGOW_HASKELL__ >= 709
-{-# LANGUAGE Safe #-}
-#else
 {-# LANGUAGE Trustworthy #-}
-#endif
+{-# LANGUAGE TypeApplications #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -29,7 +26,8 @@ module System.Posix.ByteString.FilePath (
      throwErrnoPathIf_,
      throwErrnoPathIfNull,
      throwErrnoPathIfMinus1,
-     throwErrnoPathIfMinus1_
+     throwErrnoPathIfMinus1_,
+     throwErrnoTwoPathsIfMinus1_
   ) where
 
 import Foreign hiding ( void )
@@ -42,15 +40,23 @@ import Foreign.C hiding (
      throwErrnoPathIfMinus1_ )
 
 import Control.Monad
-import Data.ByteString
+import Control.Exception
+import Data.ByteString.Internal (c_strlen)
+import GHC.Foreign as GHC ( peekCStringLen )
+import GHC.IO.Encoding ( getFileSystemEncoding )
+import GHC.IO.Exception
+import Data.ByteString as B
 import Data.ByteString.Char8 as BC
 import Prelude hiding (FilePath)
+#if !MIN_VERSION_base(4, 11, 0)
+import Data.Monoid ((<>))
+#endif
 
 -- | A literal POSIX file path
 type RawFilePath = ByteString
 
 withFilePath :: RawFilePath -> (CString -> IO a) -> IO a
-withFilePath = useAsCString
+withFilePath path = useAsCStringSafe path
 
 peekFilePath :: CString -> IO RawFilePath
 peekFilePath = packCString
@@ -91,7 +97,8 @@ throwErrnoPath :: String -> RawFilePath -> IO a
 throwErrnoPath loc path =
   do
     errno <- getErrno
-    ioError (errnoToIOError loc errno Nothing (Just (BC.unpack path)))
+    path' <- either (const (BC.unpack path)) id <$> try @IOException (decodeWithBasePosix path)
+    ioError (errnoToIOError loc errno Nothing (Just path'))
 
 -- | as 'throwErrnoIf', but exceptions include the given path when
 --   appropriate.
@@ -125,3 +132,42 @@ throwErrnoPathIfMinus1 = throwErrnoPathIf (== -1)
 --
 throwErrnoPathIfMinus1_ :: (Eq a, Num a) => String -> RawFilePath -> IO a -> IO ()
 throwErrnoPathIfMinus1_  = throwErrnoPathIf_ (== -1)
+
+-- | as 'throwErrnoTwoPathsIfMinus1_', but exceptions include two paths when appropriate.
+--
+throwErrnoTwoPathsIfMinus1_ :: (Eq a, Num a) => String -> RawFilePath -> RawFilePath -> IO a -> IO ()
+throwErrnoTwoPathsIfMinus1_  loc path1 path2 action = do
+    path1' <- either (const (BC.unpack path1)) id <$> try @IOException (decodeWithBasePosix path1)
+    path2' <- either (const (BC.unpack path2)) id <$> try @IOException (decodeWithBasePosix path2)
+    throwErrnoIfMinus1_ (loc <> " '" <> path1' <> "' to '" <> path2' <> "'") action
+
+-- | This mimics the filepath decoder base uses on unix,
+-- with the small distinction that we're not truncating at NUL bytes (because we're not at
+-- the outer FFI layer).
+decodeWithBasePosix :: RawFilePath -> IO String
+decodeWithBasePosix ba = B.useAsCStringLen ba $ \fp -> peekFilePathPosix fp
+ where
+  peekFilePathPosix :: CStringLen -> IO String
+  peekFilePathPosix fp = getFileSystemEncoding >>= \enc -> GHC.peekCStringLen enc fp
+
+-- | Wrapper around 'useAsCString', checking the encoded 'FilePath' for internal NUL octets as these are
+-- disallowed in POSIX filepaths. See https://gitlab.haskell.org/ghc/ghc/-/issues/13660
+useAsCStringSafe :: RawFilePath -> (CString -> IO a) -> IO a
+useAsCStringSafe path f = useAsCString path $ \ptr -> do
+    let len = B.length path
+    clen <- c_strlen ptr
+    if clen == fromIntegral len
+        then f ptr
+        else do
+          path' <- either (const (BC.unpack path)) id <$> try @IOException (decodeWithBasePosix path)
+          ioError (err path')
+  where
+    err path' =
+        IOError
+          { ioe_handle = Nothing
+          , ioe_type = InvalidArgument
+          , ioe_location = "checkForInteriorNuls"
+          , ioe_description = "POSIX filepaths must not contain internal NUL octets."
+          , ioe_errno = Nothing
+          , ioe_filename = Just path'
+          }

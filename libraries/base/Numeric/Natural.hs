@@ -19,6 +19,8 @@
 
 module Numeric.Natural
     ( Natural
+    , minusNaturalMaybe
     ) where
 
-import GHC.Natural
+import GHC.Num.Natural
+import GHC.Natural (minusNaturalMaybe)

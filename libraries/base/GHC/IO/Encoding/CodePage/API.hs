@@ -7,6 +7,9 @@ module GHC.IO.Encoding.CodePage.API (
     mkCodePageEncoding
   ) where
 
+-- Required for WORDS_BIGENDIAN
+#include <ghcautoconf.h>
+
 import Foreign.C
 import Foreign.Ptr
 import Foreign.Marshal
@@ -24,11 +27,15 @@ import GHC.IO.Encoding.UTF16
 import GHC.Num
 import GHC.Show
 import GHC.Real
-import GHC.Windows
+import GHC.Windows hiding (LPCSTR)
 import GHC.ForeignPtr (castForeignPtr)
 
 import System.Posix.Internals
 
+#if defined(javascript_HOST_ARCH)
+mkCodePageEncoding :: String
+mkCodePageEncoding = ""
+#else
 
 c_DEBUG_DUMP :: Bool
 c_DEBUG_DUMP = False
@@ -38,15 +45,7 @@ debugIO s
  | c_DEBUG_DUMP = puts s
  | otherwise    = return ()
 
-
-#if defined(i386_HOST_ARCH)
-# define WINDOWS_CCONV stdcall
-#elif defined(x86_64_HOST_ARCH)
-# define WINDOWS_CCONV ccall
-#else
-# error Unknown mingw32 arch
-#endif
-
+#include "windows_cconv.h"
 
 type LPCSTR = Ptr Word8
 
@@ -185,10 +184,10 @@ saner code ibuf obuf = do
    else return (why,            bufL ibuf' - bufL ibuf, ibuf', obuf')
 
 byteView :: Buffer CWchar -> Buffer Word8
-byteView (Buffer {..}) = Buffer { bufState = bufState, bufRaw = castForeignPtr bufRaw, bufSize = bufSize * 2, bufL = bufL * 2, bufR = bufR * 2 }
+byteView (Buffer {..}) = Buffer { bufState = bufState, bufRaw = castForeignPtr bufRaw, bufSize = bufSize * 2, bufOffset = bufOffset, bufL = bufL * 2, bufR = bufR * 2 }
 
 cwcharView :: Buffer Word8 -> Buffer CWchar
-cwcharView (Buffer {..}) = Buffer { bufState = bufState, bufRaw = castForeignPtr bufRaw, bufSize = half bufSize, bufL = half bufL, bufR = half bufR }
+cwcharView (Buffer {..}) = Buffer { bufState = bufState, bufRaw = castForeignPtr bufRaw, bufSize = half bufSize, bufOffset = bufOffset, bufL = half bufL, bufR = half bufR }
   where half x = case x `divMod` 2 of (y, 0) -> y
                                       _      -> errorWithoutStackTrace "cwcharView: utf16_(encode|decode) (wrote out|consumed) non multiple-of-2 number of bytes"
 
@@ -314,7 +313,7 @@ cpEncode cp _max_char_size = \ibuf obuf -> do
      | ocnt == 0 = return (Left True)
      | otherwise = alloca $ \defaulted_ptr -> do
       poke defaulted_ptr False
-      err <- c_WideCharToMultiByte (fromIntegral cp) 0 -- NB: the WC_ERR_INVALID_CHARS flag is uselses: only has an effect with the UTF-8 code page
+      err <- c_WideCharToMultiByte (fromIntegral cp) 0 -- NB: the WC_ERR_INVALID_CHARS flag is useless: only has an effect with the UTF-8 code page
                                    iptr (fromIntegral icnt) optr (fromIntegral ocnt)
                                    nullPtr defaulted_ptr
       defaulted <- peek defaulted_ptr
@@ -427,3 +426,5 @@ cpRecode try' is_valid_prefix max_i_size min_o_size iscale oscale = go
             -- Must have interpreted all given bytes successfully
             -- We need to iterate until we have consumed the complete contents of the buffer
             Right wrote_elts -> go (bufferRemove n ibuf) (obuf { bufR = bufR obuf + wrote_elts })
+
+#endif

@@ -1,11 +1,12 @@
 {-# LANGUAGE CPP #-}
 #if __GLASGOW_HASKELL__ >= 702
 {-# LANGUAGE Safe #-}
+{-# LANGUAGE DeriveGeneric #-}
 #endif
 #if __GLASGOW_HASKELL__ >= 706
 {-# LANGUAGE PolyKinds #-}
 #endif
-#if __GLASGOW_HASKELL__ >= 710
+#if __GLASGOW_HASKELL__ >= 710 && __GLASGOW_HASKELL__ < 802
 {-# LANGUAGE AutoDeriveTypeable #-}
 #endif
 -----------------------------------------------------------------------------
@@ -52,9 +53,14 @@ import Control.Monad.IO.Class
 import Control.Monad.Trans.Class
 import Data.Functor.Identity
 
+#if !(MIN_VERSION_base(4,8,0))
 import Control.Applicative
+#endif
 #if MIN_VERSION_base(4,9,0)
 import qualified Control.Monad.Fail as Fail
+#endif
+#if __GLASGOW_HASKELL__ >= 704
+import GHC.Generics
 #endif
 
 {- |
@@ -134,6 +140,9 @@ shift f = shiftT (f . (runIdentity .))
 -- 'ContT' is not a functor on the category of monads, and many operations
 -- cannot be lifted through it.
 newtype ContT r m a = ContT { runContT :: (a -> m r) -> m r }
+#if __GLASGOW_HASKELL__ >= 704
+    deriving (Generic)
+#endif
 
 -- | The result of running a CPS computation with 'return' as the
 -- final continuation.

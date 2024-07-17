@@ -1,5 +1,125 @@
 # Changelog for [`unix` package](http://hackage.haskell.org/package/unix)
 
+## 2.8.4.0 *Dec 2023*
+
+  * add `haveStatx`
+  * fix `statx.stx_mnt_id` detection on buggy glibc, see [GHC #24072](https://gitlab.haskell.org/ghc/ghc/-/issues/24072)
+
+## 2.8.3.0 *Oct 2023*
+
+  * add `getExtendedFileStatus` (based on `statx`) style functions
+  * drop support for GHC < 8.6
+  * Don't `foreign import` `environ`, see [GHC #24011](https://gitlab.haskell.org/ghc/ghc/-/issues/24011)
+
+## 2.8.2.1 *Sep 2023*
+
+  * Fix UB bug in `withFilePath` that causes it to error out (introduced in 2.8.2.0) wrt [#295](https://github.com/haskell/unix/issues/295)
+
+## 2.8.2.0 *Sep 2023*
+
+  * Bump bounds to accomodate `base-4.19` and `bytestring-0.12`.
+
+  * Ensure that `FilePath`s don't contain interior `NUL`s.
+
+  * JavaScript backend: add support for `utimes` / `lutimes` / `futimes`.
+
+## 2.8.1.1 *Mar 2023*
+  * Fix `System.Posix.Env.ByteString.getEnvironment` segfaulting on empty environment
+
+## 2.8.1.0 *Feb 2023*
+  * Fix build if HAVE_ALARM is undefined
+
+  * Add missing autoconf checks for chown/fchdir/fchmod
+
+  * Make TABX constructors and code conditional on underlying #defines
+
+  * Bump bounds to accomodate base-4.18
+
+  * Add semWaitInterruptible
+
+  * semaphore: Teach semThreadWait to use semWait with threaded RTS
+
+  * make the foreign imports of dlopen & dlclose safe
+
+  * do not use capi for dlfcn.h stuff under wasm-wasi
+
+  * Use capi for syscalls that break under musl's handling of 64-bit `time_t`
+
+  * Replace `last` with `unsnoc`
+
+  * Avoid Data.List.{head,tail}
+
+  * Consistently use `throwErrnoPathIf*`
+
+  * Fix WASI build
+
+## 2.8.0.0 *August 2022*
+  * Use ByteString for GroupEntry/UserEntry
+
+  * Fix `semTrywait` on darwin
+
+  * Fix vanishing environment variables in `System.Posix.Env.ByteString.putEnv`/`System.Posix.Env.ByteString.getEnv`
+
+  * Add missing `setEnvironment` and `clearEnv` to `System.Posix.Env.ByteString`
+
+  * Add support for filepath-1.4.100.0 with `PosixString` variants
+
+  * Expose `DirStream`, `CDir`, `CDirent` and `DirStreamOffset` (internal API)
+
+  * Add `fdRead`/`fdWrite` with ByteString payload and deprecate String based `fdRead`
+
+  * Add `clocksPerSec`
+
+  * Support wasm32-wasi
+
+  * Implement BaudRate as an `Int` newtype and allow matching via extensible PatternSynonyms
+
+  * Added `readDirStreamMaybe`
+
+  * Warn when functions are used on unsupported platforms
+
+  * Fix the error handling of `posix_fallocate`
+
+  * Export `FileStatus` constructor
+
+  * Various documentation and error message improvements
+
+  * Add openDirStreamFd, openFileAt and createFileAt
+
+  * Add accessors for st_blocks and st_blksize
+
+  * Deal with FreeBSD getpwnam_r(3), ... thread safety.  On FreeBSD these
+    are not in fact safe for overlapped execution with a sequence of
+    getpwent(3) or getgrent(3) calls when multiple "green" threads share
+    the same underlying OS thread.  The *ent(3) calls now run in bound
+    threads or else locks are used to avoid overlapped execution.
+
+  * Make passwd/group FFI functions "safe", these are not low-latency APIs.
+
+  * Drop support for non-thread-safe getpwnam(3) and getpwuid(3).  All
+    supported platforms have getpwnam_r(3) and getpwuid_r(3).  This was
+    already the case for the getgr(nam|gid) calls.
+
+  * Added terminal output flags to `System.Posix.Terminal.Common.TerminalMode`
+
+        IXANY, ONLCR, OCRNL, ONOCR, ONLRET, OFDEL, OFILL, NLDLY(NL0,NL1),
+        CRDLY(CR0,CR1,CR2,CR2), TABDLY(TAB0,TAB1,TAB2,TAB3) BSDLY(BS0,BS1),
+        VTDLY(VT0,VT1), FFDLY(FF0,FF1)
+
+  * Add support for `O_NOFOLLOW`, `O_CLOEXEC`, `O_DIRECTORY` and `O_SYNC`
+    (#6, #57)
+
+  * Refactor API of `openFd` removing `Maybe FileMode` argument,
+    which now must be passed as part of `OpenFileFlags`
+    (e.g. `defaultFileFlags { creat = Just mode }`)  (#58)
+
+  * Remove deprecated `execvpe(3)` legacy-emulation CPP macro
+
+  * Generalise return type of `exitImmediately` from `ExitCode -> IO ()` to
+    `∀a. ExitCode -> IO a` (#130)
+
+  * Add `Read`, `Show`, `Eq`, and `Ord` typeclass instances to `OpenFileFlags` and `OpenMode`. (#75, #141)
+
 ## 2.7.2.2  *May 2017*
 
   * Bundled with GHC 8.2.1

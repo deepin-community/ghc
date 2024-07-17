@@ -27,6 +27,8 @@ module Debug.Trace (
         traceId,
         traceShow,
         traceShowId,
+        traceWith,
+        traceShowWith,
         traceStack,
         traceIO,
         traceM,
@@ -36,7 +38,9 @@ module Debug.Trace (
         -- * Eventlog tracing
         -- $eventlog_tracing
         traceEvent,
+        traceEventWith,
         traceEventIO,
+        flushEventLog,
 
         -- * Execution phase markers
         -- $markers
@@ -53,7 +57,7 @@ import GHC.IO.Encoding
 import GHC.Ptr
 import GHC.Show
 import GHC.Stack
-import Data.List
+import Data.List (null, partition)
 
 -- $setup
 -- >>> import Prelude
@@ -78,10 +82,10 @@ import Data.List
 --
 -- @since 4.5.0.0
 traceIO :: String -> IO ()
-traceIO msg = do
+traceIO msg =
     withCString "%s\n" $ \cfmt -> do
      -- NB: debugBelch can't deal with null bytes, so filter them
-     -- out so we don't accidentally truncate the message.  See Trac #9395
+     -- out so we don't accidentally truncate the message.  See #9395
      let (nulls, msg') = partition (=='\0') msg
      withCString msg' $ \cmsg ->
       debugBelch cfmt cmsg
@@ -105,12 +109,13 @@ putTraceMsg = traceIO
 The 'trace' function outputs the trace message given as its first argument,
 before returning the second argument as its result.
 
-For example, this returns the value of @f x@ but first outputs the message.
+For example, this returns the value of @f x@ and outputs the message to stderr.
+Depending on your terminal (settings), they may or may not be mixed.
 
 >>> let x = 123; f = show
 >>> trace ("calling f with x = " ++ show x) (f x)
-"calling f with x = 123
-123"
+calling f with x = 123
+"123"
 
 The 'trace' function should /only/ be used for debugging, or for monitoring
 execution. The function is not referentially transparent: its type indicates
@@ -126,8 +131,8 @@ trace string expr = unsafePerformIO $ do
 Like 'trace' but returns the message instead of a third value.
 
 >>> traceId "hello"
-"hello
-hello"
+hello
+"hello"
 
 @since 4.7.0.0
 -}
@@ -160,6 +165,31 @@ Like 'traceShow' but returns the shown value instead of a third value.
 -}
 traceShowId :: Show a => a -> a
 traceShowId a = trace (show a) a
+
+{-|
+Like 'trace', but outputs the result of calling a function on the argument.
+
+>>> traceWith fst ("hello","world")
+hello
+("hello","world")
+
+@since 4.18.0.0
+-}
+traceWith :: (a -> String) -> a -> a
+traceWith f a = trace (f a) a
+
+{-|
+Like 'traceWith', but uses 'show' on the result of the function to convert it to
+a 'String'.
+
+>>> traceShowWith length [1,2,3]
+3
+[1,2,3]
+
+@since 4.18.0.0
+-}
+traceShowWith :: Show b => (a -> b) -> a -> a
+traceShowWith f = traceWith (show . f)
 
 {-|
 Like 'trace' but returning unit in an arbitrary 'Applicative' context. Allows
@@ -270,12 +300,19 @@ traceEventIO msg =
   GHC.Foreign.withCString utf8 msg $ \(Ptr p) -> IO $ \s ->
     case traceEvent# p s of s' -> (# s', () #)
 
+-- | Like 'traceEvent', but emits the result of calling a function on its
+-- argument.
+--
+-- @since 4.18.0.0
+traceEventWith :: (a -> String) -> a -> a
+traceEventWith f a = traceEvent (f a) a
+
 -- $markers
 --
 -- When looking at a profile for the execution of a program we often want to
 -- be able to mark certain points or phases in the execution and see that
 -- visually in the profile.
-
+--
 -- For example, a program might have several distinct phases with different
 -- performance or resource behaviour in each phase. To properly interpret the
 -- profile graph we really want to see when each phase starts and ends.
@@ -319,3 +356,11 @@ traceMarkerIO :: String -> IO ()
 traceMarkerIO msg =
   GHC.Foreign.withCString utf8 msg $ \(Ptr p) -> IO $ \s ->
     case traceMarker# p s of s' -> (# s', () #)
+
+-- | Immediately flush the event log, if enabled.
+--
+-- @since 4.15.0.0
+flushEventLog :: IO ()
+flushEventLog = c_flushEventLog nullPtr
+
+foreign import ccall "flushEventLog" c_flushEventLog :: Ptr () -> IO ()

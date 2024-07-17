@@ -1,0 +1,25 @@
+From 00c4258dadc0f61b8bd03e1fed1a53b7017e12a1 Mon Sep 17 00:00:00 2001
+From: hudeng <hudeng@deepin.org>
+Date: Wed, 17 Jul 2024 22:10:41 +0800
+Subject: [PATCH] chore: Add riscv64 and loong64 support for hadiran bindist
+
+---
+ hadrian/bindist/config.mk.in | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadrian/bindist/config.mk.in b/hadrian/bindist/config.mk.in
+index cb85c67a..bf6e6de5 100644
+--- a/hadrian/bindist/config.mk.in
++++ b/hadrian/bindist/config.mk.in
+@@ -141,7 +141,7 @@ GhcWithSMP := $(strip $(if $(filter YESNO, $(ArchSupportsSMP)$(GhcUnregisterised
+ # Whether to include GHCi in the compiler.  Depends on whether the RTS linker
+ # has support for this OS/ARCH combination.
+ OsSupportsGHCi=$(strip $(patsubst $(TargetOS_CPP), YES, $(findstring $(TargetOS_CPP), mingw32 linux solaris2 freebsd dragonfly netbsd openbsd darwin kfreebsdgnu)))
+-ArchSupportsGHCi=$(strip $(patsubst $(TargetArch_CPP), YES, $(findstring $(TargetArch_CPP), i386 x86_64 powerpc powerpc64 powerpc64le sparc sparc64 arm aarch64)))
++ArchSupportsGHCi=$(strip $(patsubst $(TargetArch_CPP), YES, $(findstring $(TargetArch_CPP), i386 x86_64 powerpc powerpc64 powerpc64le sparc sparc64 arm aarch64 riscv64 loongarch64)))
+ 
+ ifeq "$(OsSupportsGHCi)$(ArchSupportsGHCi)" "YESYES"
+ GhcWithInterpreter=YES
+-- 
+2.43.4
+

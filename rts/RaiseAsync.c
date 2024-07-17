@@ -6,7 +6,7 @@
  *
  * --------------------------------------------------------------------------*/
 
-#include "PosixSource.h"
+#include "rts/PosixSource.h"
 #include "Rts.h"
 
 #include "sm/Storage.h"
@@ -20,7 +20,7 @@
 #include "Profiling.h"
 #include "Messages.h"
 #if defined(mingw32_HOST_OS)
-#include "win32/IOManager.h"
+#include "win32/MIOManager.h"
 #endif
 
 static void blockedThrowTo (Capability *cap,
@@ -93,7 +93,7 @@ suspendComputation (Capability *cap, StgTSO *tso, StgUpdateFrame *stop_here)
    throwTo().
 
    Note [Throw to self when masked]
-
+   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
    When a StackOverflow occurs when the thread is masked, we want to
    defer the exception to when the thread becomes unmasked/hits an
    interruptible point.  We already have a mechanism for doing this,
@@ -174,11 +174,11 @@ throwToSelf (Capability *cap, StgTSO *tso, StgClosure *exception)
 
      - or it is masking exceptions (TSO_BLOCKEX)
 
-   Currently, if the target is BlockedOnMVar, BlockedOnSTM, or
-   BlockedOnBlackHole then we acquire ownership of the TSO by locking
-   its parent container (e.g. the MVar) and then raise the exception.
-   We might change these cases to be more message-passing-like in the
-   future.
+   Currently, if the target is BlockedOnMVar, BlockedOnSTM,
+   or BlockedOnBlackHole then we acquire ownership of the
+   TSO by locking its parent container (e.g. the MVar) and then raise the
+   exception.  We might change these cases to be more message-passing-like in
+   the future.
 
    Returns:
 
@@ -187,7 +187,7 @@ throwToSelf (Capability *cap, StgTSO *tso, StgClosure *exception)
    MessageThrowTo *   exception was not raised; the source TSO
                       should now put itself in the state
                       BlockedOnMsgThrowTo, and when it is ready
-                      it should unlock the mssage using
+                      it should unlock the message using
                       unlockClosure(msg, &stg_MSG_THROWTO_info);
                       If it decides not to raise the exception after
                       all, it can revoke it safely with
@@ -232,7 +232,7 @@ uint32_t
 throwToMsg (Capability *cap, MessageThrowTo *msg)
 {
     StgWord status;
-    StgTSO *target = msg->target;
+    StgTSO *target = ACQUIRE_LOAD(&msg->target);
     Capability *target_cap;
 
     goto check_target;
@@ -245,8 +245,9 @@ check_target:
     ASSERT(target != END_TSO_QUEUE);
 
     // Thread already dead?
-    if (target->what_next == ThreadComplete
-        || target->what_next == ThreadKilled) {
+    StgWord16 what_next = SEQ_CST_LOAD(&target->what_next);
+    if (what_next == ThreadComplete
+        || what_next == ThreadKilled) {
         return THROWTO_SUCCESS;
     }
 
@@ -335,7 +336,7 @@ check_target:
         }
 
         // nobody else can wake up this TSO after we claim the message
-        doneWithMsgThrowTo(m);
+        doneWithMsgThrowTo(cap, m);
 
         raiseAsync(cap, target, msg->exception, false, NULL);
         return THROWTO_SUCCESS;
@@ -367,7 +368,8 @@ check_target:
 
         // we have the MVar, let's check whether the thread
         // is still blocked on the same MVar.
-        if ((target->why_blocked != BlockedOnMVar && target->why_blocked != BlockedOnMVarRead)
+        if ((target->why_blocked != BlockedOnMVar
+             && target->why_blocked != BlockedOnMVarRead)
             || (StgMVar *)target->block_info.closure != mvar) {
             unlockClosure((StgClosure *)mvar, info);
             goto retry;
@@ -455,7 +457,7 @@ check_target:
         blockedThrowTo(cap,target,msg);
         return THROWTO_BLOCKED;
 
-#if !defined(THREADEDED_RTS)
+#if !defined(THREADED_RTS)
     case BlockedOnRead:
     case BlockedOnWrite:
     case BlockedOnDelay:
@@ -515,9 +517,9 @@ blockedThrowTo (Capability *cap, StgTSO *target, MessageThrowTo *msg)
 
     ASSERT(target->cap == cap);
 
+    dirty_TSO(cap,target); // we will modify the blocked_exceptions queue
     msg->link = target->blocked_exceptions;
     target->blocked_exceptions = msg;
-    dirty_TSO(cap,target); // we modified the blocked_exceptions queue
 }
 
 /* -----------------------------------------------------------------------------
@@ -555,7 +557,8 @@ maybePerformBlockedException (Capability *cap, StgTSO *tso)
 
     if (tso->blocked_exceptions != END_BLOCKED_EXCEPTIONS_QUEUE &&
         (tso->flags & TSO_BLOCKEX) != 0) {
-        debugTraceCap(DEBUG_sched, cap, "throwTo: thread %lu has blocked exceptions but is inside block", (unsigned long)tso->id);
+        debugTraceCap(DEBUG_sched, cap, "throwTo: thread %" FMT_StgThreadID
+                      " has blocked exceptions but is inside block", tso->id);
     }
 
     if (tso->blocked_exceptions != END_BLOCKED_EXCEPTIONS_QUEUE
@@ -576,7 +579,7 @@ maybePerformBlockedException (Capability *cap, StgTSO *tso)
 
         throwToSingleThreaded(cap, msg->target, msg->exception);
         source = msg->source;
-        doneWithMsgThrowTo(msg);
+        doneWithMsgThrowTo(cap, msg);
         tryWakeupThread(cap, source);
         return 1;
     }
@@ -598,7 +601,7 @@ awakenBlockedExceptionQueue (Capability *cap, StgTSO *tso)
         i = lockClosure((StgClosure *)msg);
         if (i != &stg_MSG_NULL_info) {
             source = msg->source;
-            doneWithMsgThrowTo(msg);
+            doneWithMsgThrowTo(cap, msg);
             tryWakeupThread(cap, source);
         } else {
             unlockClosure((StgClosure *)msg,i);
@@ -695,7 +698,7 @@ removeFromQueues(Capability *cap, StgTSO *tso)
       // ASSERT(m->header.info == &stg_WHITEHOLE_info);
 
       // unlock and revoke it at the same time
-      doneWithMsgThrowTo(m);
+      doneWithMsgThrowTo(cap, m);
       break;
   }
 
@@ -705,7 +708,8 @@ removeFromQueues(Capability *cap, StgTSO *tso)
 #if defined(mingw32_HOST_OS)
   case BlockedOnDoProc:
 #endif
-      removeThreadFromDeQueue(cap, &blocked_queue_hd, &blocked_queue_tl, tso);
+      removeThreadFromDeQueue(cap, &cap->iomgr->blocked_queue_hd,
+                                   &cap->iomgr->blocked_queue_tl, tso);
 #if defined(mingw32_HOST_OS)
       /* (Cooperatively) signal that the worker thread should abort
        * the request.
@@ -715,7 +719,7 @@ removeFromQueues(Capability *cap, StgTSO *tso)
       goto done;
 
   case BlockedOnDelay:
-        removeThreadFromQueue(cap, &sleeping_queue, tso);
+        removeThreadFromQueue(cap, &cap->iomgr->sleeping_queue, tso);
         goto done;
 #endif
 
@@ -777,7 +781,7 @@ raiseAsync(Capability *cap, StgTSO *tso, StgClosure *exception,
     StgStack *stack;
 
     debugTraceCap(DEBUG_sched, cap,
-                  "raising exception in thread %ld.", (long)tso->id);
+                  "raising exception in thread %" FMT_StgThreadID ".", tso->id);
 
 #if defined(PROFILING)
     /*
@@ -946,45 +950,37 @@ raiseAsync(Capability *cap, StgTSO *tso, StgClosure *exception,
 
         case CATCH_FRAME:
             // If we find a CATCH_FRAME, and we've got an exception to raise,
-            // then build the THUNK raise(exception), and leave it on
-            // top of the CATCH_FRAME ready to enter.
-            //
+            // then set up the top of the stack to apply the handler;
+            // see Note [Apply the handler directly in raiseAsync].
         {
-            StgCatchFrame *cf = (StgCatchFrame *)frame;
-            StgThunk *raise;
-
             if (exception == NULL) break;
 
-            // we've got an exception to raise, so let's pass it to the
-            // handler in this frame.
-            //
-            raise = (StgThunk *)allocate(cap,sizeofW(StgThunk)+1);
-            TICK_ALLOC_SE_THK(WDS(1),0);
-            SET_HDR(raise,&stg_raise_info,cf->header.prof.ccs);
-            raise->payload[0] = exception;
+            StgClosure *handler = ((StgCatchFrame *)frame)->handler;
 
-            // throw away the stack from Sp up to the CATCH_FRAME.
-            //
-            sp = frame - 1;
+            // Throw away the stack from Sp up to and including the CATCH_FRAME.
+            sp = frame + stack_frame_sizeW((StgClosure *)frame);
 
-            /* Ensure that async exceptions are blocked now, so we don't get
-             * a surprise exception before we get around to executing the
-             * handler.
-             */
-            tso->flags |= TSO_BLOCKEX;
-            if ((cf->exceptions_blocked & TSO_INTERRUPTIBLE) == 0) {
-                tso->flags &= ~TSO_INTERRUPTIBLE;
-            } else {
-                tso->flags |= TSO_INTERRUPTIBLE;
+            // Unmask async exceptions after running the handler, if necessary.
+            if ((tso->flags & TSO_BLOCKEX) == 0) {
+              sp--;
+              sp[0] = (W_)&stg_unmaskAsyncExceptionszh_ret_info;
             }
 
-            /* Put the newly-built THUNK on top of the stack, ready to execute
-             * when the thread restarts.
-             */
-            sp[0] = (W_)raise;
-            sp[-1] = (W_)&stg_enter_info;
-            stack->sp = sp-1;
-            tso->what_next = ThreadRunGHC;
+            // Ensure that async exceptions are masked while running the handler;
+            // see Note [Apply the handler directly in raiseAsync].
+            if ((tso->flags & (TSO_BLOCKEX | TSO_INTERRUPTIBLE)) != TSO_BLOCKEX) {
+              tso->flags |= TSO_BLOCKEX | TSO_INTERRUPTIBLE;
+            }
+
+            // Set up the top of the stack to apply the handler.
+            sp -= 4;
+            sp[0] = (W_)&stg_enter_info;
+            sp[1] = (W_)handler;
+            sp[2] = (W_)&stg_ap_pv_info;
+            sp[3] = (W_)exception;
+
+            stack->sp = sp;
+            RELAXED_STORE(&tso->what_next, ThreadRunGHC);
             goto done;
         }
 
@@ -1075,6 +1071,15 @@ raiseAsync(Capability *cap, StgTSO *tso, StgClosure *exception,
         };
 
         default:
+            // see Note [Update async masking state on unwind] in Schedule.c
+            if (*frame == (W_)&stg_unmaskAsyncExceptionszh_ret_info) {
+                tso->flags &= ~(TSO_BLOCKEX | TSO_INTERRUPTIBLE);
+            } else if (*frame == (W_)&stg_maskAsyncExceptionszh_ret_info) {
+                tso->flags |= TSO_BLOCKEX | TSO_INTERRUPTIBLE;
+            } else if (*frame == (W_)&stg_maskUninterruptiblezh_ret_info) {
+                tso->flags |= TSO_BLOCKEX;
+                tso->flags &= ~TSO_INTERRUPTIBLE;
+            }
             break;
         }
 
@@ -1093,3 +1098,26 @@ done:
 
     return tso;
 }
+
+/* Note [Apply the handler directly in raiseAsync]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+When we encounter a `catch#` frame while unwinding the stack due to an
+async exception, we need to set up the stack to resume execution by
+invoking the exception handler. One natural way to do it would be to
+simply place a `raise#` thunk on the top of the stack, ready to be
+entered. This would effectively convert the asynchronous exception to
+a synchronous one at a point where it’s known to be safe to do so.
+
+However, there is a danger to this strategy: if async exceptions are
+currently unmasked, it becomes possible for a second async exception
+to be delivered before we enter the application of `raise#`, which
+would result in the first exception being lost. The easiest way to
+prevent this race from happening is to have `raiseAsync` set up the
+stack to apply the handler directly, effectively emulating the
+behavior of `raise#`, as this allows exceptions to be preemptively
+masked before returning. This means `raiseAsync` must also push a
+frame to unmask async exceptions after the handler returns if
+necessary, just as `raise#` does.
+
+This strategy results in some logical duplication, but it is correct,
+and the duplicated logic is small enough to be acceptable. */

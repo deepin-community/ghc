@@ -1,9 +1,5 @@
 {-# LANGUAGE CApiFFI #-}
-#if __GLASGOW_HASKELL__ >= 709
 {-# LANGUAGE Safe #-}
-#else
-{-# LANGUAGE Trustworthy #-}
-#endif
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  System.Posix.Env
@@ -32,21 +28,15 @@ module System.Posix.Env (
 
 #include "HsUnix.h"
 
+import Foreign hiding (void)
 import Foreign.C.Error (throwErrnoIfMinus1_)
 import Foreign.C.Types
 import Foreign.C.String
-import Foreign.Marshal.Array
-import Foreign.Ptr
-import Foreign.Storable
 import Control.Monad
 import Data.Maybe (fromMaybe)
 import System.Posix.Internals
 
-#if !MIN_VERSION_base(4,7,0)
--- needed for backported local 'newFilePath' binding in 'putEnv'
-import GHC.IO.Encoding (getFileSystemEncoding)
-import qualified GHC.Foreign as GHC (newCString)
-#endif
+import qualified System.Posix.Env.Internal as Internal
 
 -- |'getEnv' looks up a variable in the environment.
 
@@ -56,7 +46,7 @@ getEnv ::
 getEnv name = do
   litstring <- withFilePath name c_getenv
   if litstring /= nullPtr
-     then liftM Just $ peekFilePath litstring
+     then Just <$> peekFilePath litstring
      else return Nothing
 
 -- |'getEnvDefault' is a wrapper around 'getEnv' where the
@@ -67,34 +57,13 @@ getEnvDefault ::
   String    {- ^ variable name                    -} ->
   String    {- ^ fallback value                   -} ->
   IO String {- ^ variable value or fallback value -}
-getEnvDefault name fallback = liftM (fromMaybe fallback) (getEnv name)
+getEnvDefault name fallback = fromMaybe fallback <$> getEnv name
 
 foreign import ccall unsafe "getenv"
    c_getenv :: CString -> IO CString
 
 getEnvironmentPrim :: IO [String]
-getEnvironmentPrim = do
-  c_environ <- getCEnviron
-  -- environ can be NULL
-  if c_environ == nullPtr
-    then return []
-    else do
-      arr <- peekArray0 nullPtr c_environ
-      mapM peekFilePath arr
-
-getCEnviron :: IO (Ptr CString)
-#if HAVE__NSGETENVIRON
--- You should not access @char **environ@ directly on Darwin in a bundle/shared library.
--- See #2458 and http://developer.apple.com/library/mac/#documentation/Darwin/Reference/ManPages/man7/environ.7.html
-getCEnviron = nsGetEnviron >>= peek
-
-foreign import ccall unsafe "_NSGetEnviron"
-   nsGetEnviron :: IO (Ptr (Ptr CString))
-#else
-getCEnviron = peek c_environ_p
-foreign import ccall unsafe "&environ"
-   c_environ_p :: Ptr (Ptr CString)
-#endif
+getEnvironmentPrim = Internal.getEnvironmentPrim >>= mapM peekFilePath 
 
 -- |'getEnvironment' retrieves the entire environment as a
 -- list of @(key,value)@ pairs.
@@ -150,11 +119,6 @@ putEnv keyvalue = do s <- newFilePath keyvalue
                      -- According to SUSv2, the string passed to putenv
                      -- becomes part of the environment. #7342
                      throwErrnoIfMinus1_ "putenv" (c_putenv s)
-#if !MIN_VERSION_base(4,7,0)
-    where
-      newFilePath :: FilePath -> IO CString
-      newFilePath fp = getFileSystemEncoding >>= \enc -> GHC.newCString enc fp
-#endif
 
 foreign import ccall unsafe "putenv"
    c_putenv :: CString -> IO CInt
@@ -199,7 +163,7 @@ foreign import ccall unsafe "clearenv"
 #else
 -- Fallback to 'environ[0] = NULL'.
 clearEnv = do
-  c_environ <- getCEnviron
+  c_environ <- Internal.getCEnviron
   unless (c_environ == nullPtr) $
     poke c_environ nullPtr
 #endif
