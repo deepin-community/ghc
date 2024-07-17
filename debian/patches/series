@@ -26,3 +26,4 @@ time_t-time
 llvm-new-pass-manager
 llvm-newer-version
 hadrian-plans
+Add-riscv64-and-loong64-support-for-hadiran-bindist.patch

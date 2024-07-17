@@ -1,3 +1,9 @@
+ghc (9.6.5-2deepin1) experimental; urgency=medium
+
+  * chore: Add riscv64 and loong64 support for hadiran bindist
+
+ -- hudeng <hudeng@deepin.org>  Wed, 17 Jul 2024 22:16:51 +0800
+
 ghc (9.6.5-1~exp1) experimental; urgency=medium
 
   * New upstream release
